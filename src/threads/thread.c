@@ -71,6 +71,47 @@ static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
 
+// Function to compare priority of two threads for ordering in list
+// used for list_insert_ordered
+static bool compare_thread_priority_more (const struct list_elem *a,
+                                     const struct list_elem *b,
+                                     void *aux UNUSED)
+{
+  struct thread *thread_a = list_entry (a, struct thread, elem);
+  struct thread *thread_b = list_entry (b, struct thread, elem);
+  // list sorts in ascending order, so opposite comparison
+  return thread_a->priority > thread_b->priority;
+}
+
+static void check_priority (void) {
+  // if ready list is not empty, and current thread's priority is less than
+  // highest priority thread in ready list, yield the CPU
+  if (!list_empty(&ready_list)) {
+    struct list_elem *first_elem = list_front(&ready_list);
+    struct thread *highest_priority_thread = list_entry (first_elem, struct thread, elem);
+    if (thread_get_priority() < highest_priority_thread->priority) {
+      thread_yield();
+    }
+  }
+}
+
+/* task 2.2.3, priority scheduling TODO
+=========================================
+1. where ever a thread is added to ready list (thread yield and thread unblock), instead of adding to back of list
+do list_insert_ordered with a comparison function that compares priority of two threads.
+Also, when a thread is added to ready list, check if highest priority thread in ready list is 
+greater than current thread's priority if so, yield the CPU (so that higher priority thread can run)
+
+3. whenever priority for current thread is changed, then compare with highest priority thread in
+ready list and yield if necessary
+
+2. in synch.c, when a thread is added to semaphore's waiters list, do list_insert_ordered with comparison
+function that compares priority of two threads. This ensures that when sema_up is called, 
+the highest priority thread is unblocked first
+=========================================
+*/
+
+
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
    general and it is possible in this case only because loader.S
@@ -228,12 +269,15 @@ void thread_unblock (struct thread *t)
   enum intr_level old_level;
 
   ASSERT (is_thread (t));
-
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
-  list_push_back (&ready_list, &t->elem);
+  list_insert_ordered (&ready_list, &t->elem, compare_thread_priority_more, NULL);
+  
+  check_priority();
+  // list_push_back (&ready_list, &t->elem);
   t->status = THREAD_READY;
   intr_set_level (old_level);
+  
 }
 
 /* Returns the name of the running thread. */
@@ -290,8 +334,11 @@ void thread_yield (void)
   ASSERT (!intr_context ());
 
   old_level = intr_disable ();
-  if (cur != idle_thread)
-    list_push_back (&ready_list, &cur->elem);
+  if (cur != idle_thread) {
+    list_insert_ordered (&ready_list, &cur->elem, compare_thread_priority_more, NULL);
+    // list_push_back (&ready_list, &cur->elem);
+  }
+    
   cur->status = THREAD_READY;
   schedule ();
   intr_set_level (old_level);
@@ -316,6 +363,7 @@ void thread_foreach (thread_action_func *func, void *aux)
 void thread_set_priority (int new_priority)
 {
   thread_current ()->priority = new_priority;
+  check_priority();
 }
 
 /* Returns the current thread's priority. */
