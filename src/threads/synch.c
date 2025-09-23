@@ -66,7 +66,8 @@ void sema_down (struct semaphore *sema)
   old_level = intr_disable ();
   while (sema->value == 0)
     {
-      list_push_back (&sema->waiters, &thread_current ()->elem);
+      // list_push_back (&sema->waiters, &thread_current ()->elem);
+      list_insert_ordered (&sema->waiters, &thread_current ()->elem, compare_thread_priority_more, NULL);
       thread_block ();
     }
   sema->value--;
@@ -114,6 +115,10 @@ void sema_up (struct semaphore *sema)
         list_entry (list_pop_front (&sema->waiters), struct thread, elem));
   sema->value++;
   intr_set_level (old_level);
+  // sema up disables interrupts, so if it was previously on then critical section is now over.
+  if (old_level == INTR_ON) {
+    check_priority ();
+  }
 }
 
 static void sema_test_helper (void *sema_);
@@ -251,6 +256,25 @@ void cond_init (struct condition *cond)
 
   list_init (&cond->waiters);
 }
+// compare the highest priority of 2 semaphore waiters
+static bool cond_sema_more(const struct list_elem *a,
+                           const struct list_elem *b,
+                           void *aux UNUSED) {
+  int priorityA = PRI_MIN;
+  int priorityB = PRI_MIN;
+  const struct semaphore_elem *sa = list_entry(a, struct semaphore_elem, elem);
+  const struct semaphore_elem *sb = list_entry(b, struct semaphore_elem, elem);
+
+  /* Each semaphore has waiters ordered by thread priority (sema_down already does that). */
+  if(!list_empty(&sa->semaphore.waiters))
+    priorityA = list_entry(list_front(&sa->semaphore.waiters), struct thread, elem)->priority;
+  if(!list_empty(&sb->semaphore.waiters))  // no wait
+    priorityB = list_entry(list_front(&sb->semaphore.waiters), struct thread, elem)->priority;
+  // struct thread *ta = list_entry(list_front(&sa->semaphore.waiters), struct thread, elem);
+  // struct thread *tb = list_entry(list_front(&sb->semaphore.waiters), struct thread, elem);
+  // return ta->priority > tb->priority;  /* higher first */
+  return priorityA > priorityB;
+}
 
 /* Atomically releases LOCK and waits for COND to be signaled by
    some other piece of code.  After COND is signaled, LOCK is
@@ -283,6 +307,8 @@ void cond_wait (struct condition *cond, struct lock *lock)
 
   sema_init (&waiter.semaphore, 0);
   list_push_back (&cond->waiters, &waiter.elem);
+  
+  // list_insert_ordered (&cond->waiters, &waiter.elem, cond_sema_more, NULL);
   lock_release (lock);
   sema_down (&waiter.semaphore);
   lock_acquire (lock);
@@ -302,10 +328,13 @@ void cond_signal (struct condition *cond, struct lock *lock UNUSED)
   ASSERT (!intr_context ());
   ASSERT (lock_held_by_current_thread (lock));
 
-  if (!list_empty (&cond->waiters))
+  if (!list_empty (&cond->waiters)) {
+    // new threads may have been added to semaphore waiting lists, so sort again
+    list_sort(&cond->waiters, cond_sema_more, NULL);
     sema_up (&list_entry (list_pop_front (&cond->waiters),
                           struct semaphore_elem, elem)
                   ->semaphore);
+  }
 }
 
 /* Wakes up all threads, if any, waiting on COND (protected by

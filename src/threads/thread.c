@@ -73,9 +73,9 @@ static tid_t allocate_tid (void);
 
 // Function to compare priority of two threads for ordering in list
 // used for list_insert_ordered
-static bool compare_thread_priority_more (const struct list_elem *a,
-                                     const struct list_elem *b,
-                                     void *aux UNUSED)
+bool compare_thread_priority_more (const struct list_elem *a,
+                                          const struct list_elem *b,
+                                          void *aux UNUSED)
 {
   struct thread *thread_a = list_entry (a, struct thread, elem);
   struct thread *thread_b = list_entry (b, struct thread, elem);
@@ -83,34 +83,40 @@ static bool compare_thread_priority_more (const struct list_elem *a,
   return thread_a->priority > thread_b->priority;
 }
 
-static void check_priority (void) {
+void check_priority (void)
+{
   // if ready list is not empty, and current thread's priority is less than
   // highest priority thread in ready list, yield the CPU
-  if (!list_empty(&ready_list)) {
-    struct list_elem *first_elem = list_front(&ready_list);
-    struct thread *highest_priority_thread = list_entry (first_elem, struct thread, elem);
-    if (thread_get_priority() < highest_priority_thread->priority) {
-      thread_yield();
+  if (!list_empty (&ready_list))
+    {
+      struct list_elem *first_elem = list_front (&ready_list);
+      struct thread *highest_priority_thread =
+          list_entry (first_elem, struct thread, elem);
+      if (thread_get_priority () < highest_priority_thread->priority)
+        {
+          thread_yield ();
+        }
     }
-  }
 }
 
 /* task 2.2.3, priority scheduling TODO
 =========================================
-1. where ever a thread is added to ready list (thread yield and thread unblock), instead of adding to back of list
-do list_insert_ordered with a comparison function that compares priority of two threads.
-Also, when a thread is added to ready list, check if highest priority thread in ready list is 
-greater than current thread's priority if so, yield the CPU (so that higher priority thread can run)
+1. where ever a thread is added to ready list (thread yield and thread unblock),
+instead of adding to back of list do list_insert_ordered with a comparison
+function that compares priority of two threads. Also, when a thread is added to
+ready list, check if highest priority thread in ready list is greater than
+current thread's priority if so, yield the CPU (so that higher priority thread
+can run)
 
-3. whenever priority for current thread is changed, then compare with highest priority thread in
-ready list and yield if necessary
+3. whenever priority for current thread is changed, then compare with highest
+priority thread in ready list and yield if necessary
 
-2. in synch.c, when a thread is added to semaphore's waiters list, do list_insert_ordered with comparison
-function that compares priority of two threads. This ensures that when sema_up is called, 
-the highest priority thread is unblocked first
+2. in synch.c, when a thread is added to semaphore's waiters list, do
+list_insert_ordered with comparison function that compares priority of two
+threads. This ensures that when sema_up is called, the highest priority thread
+is unblocked first
 =========================================
 */
-
 
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
@@ -271,13 +277,18 @@ void thread_unblock (struct thread *t)
   ASSERT (is_thread (t));
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
-  list_insert_ordered (&ready_list, &t->elem, compare_thread_priority_more, NULL);
-  
-  check_priority();
+  list_insert_ordered (&ready_list, &t->elem, compare_thread_priority_more,
+                       NULL);
+
   // list_push_back (&ready_list, &t->elem);
   t->status = THREAD_READY;
   intr_set_level (old_level);
   
+  // if old_level was INTR_OFF, then it is part of a larger critical section
+  // so yielding CPU would break atomicity.
+  if (old_level == INTR_ON) {
+      check_priority();
+  }
 }
 
 /* Returns the name of the running thread. */
@@ -334,11 +345,13 @@ void thread_yield (void)
   ASSERT (!intr_context ());
 
   old_level = intr_disable ();
-  if (cur != idle_thread) {
-    list_insert_ordered (&ready_list, &cur->elem, compare_thread_priority_more, NULL);
-    // list_push_back (&ready_list, &cur->elem);
-  }
-    
+  if (cur != idle_thread)
+    {
+      list_insert_ordered (&ready_list, &cur->elem,
+                           compare_thread_priority_more, NULL);
+      // list_push_back (&ready_list, &cur->elem);
+    }
+
   cur->status = THREAD_READY;
   schedule ();
   intr_set_level (old_level);
@@ -363,16 +376,14 @@ void thread_foreach (thread_action_func *func, void *aux)
 void thread_set_priority (int new_priority)
 {
   thread_current ()->priority = new_priority;
-  check_priority();
+  check_priority ();
 }
 
 /* Returns the current thread's priority. */
 int thread_get_priority (void) { return thread_current ()->priority; }
 
 /* Sets the current thread's nice value to NICE. */
-void thread_set_nice (int nice UNUSED)
-{ /* Not yet implemented. */
-}
+void thread_set_nice (int nice UNUSED) { /* Not yet implemented. */ }
 
 /* Returns the current thread's nice value. */
 int thread_get_nice (void)
@@ -428,7 +439,7 @@ static void idle (void *idle_started_ UNUSED)
 
          See [IA32-v2a] "HLT", [IA32-v2b] "STI", and [IA32-v3a]
          7.11.1 "HLT Instruction". */
-      asm volatile("sti; hlt" : : : "memory");
+      asm volatile ("sti; hlt" : : : "memory");
     }
 }
 
@@ -451,7 +462,7 @@ struct thread *running_thread (void)
      down to the start of a page.  Because `struct thread' is
      always at the beginning of a page and the stack pointer is
      somewhere in the middle, this locates the curent thread. */
-  asm("mov %%esp, %0" : "=g"(esp));
+  asm ("mov %%esp, %0" : "=g"(esp));
   return pg_round_down (esp);
 }
 
