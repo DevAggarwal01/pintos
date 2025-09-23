@@ -257,9 +257,7 @@ void cond_init (struct condition *cond)
   list_init (&cond->waiters);
 }
 // compare the highest priority of 2 semaphore waiters
-static bool cond_sema_more(const struct list_elem *a,
-                           const struct list_elem *b,
-                           void *aux UNUSED) {
+static bool cond_sema_more(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) {
   int priorityA = PRI_MIN;
   int priorityB = PRI_MIN;
   const struct semaphore_elem *sa = list_entry(a, struct semaphore_elem, elem);
