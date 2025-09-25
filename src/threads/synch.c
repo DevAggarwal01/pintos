@@ -108,16 +108,25 @@ void sema_up (struct semaphore *sema)
   enum intr_level old_level;
 
   ASSERT (sema != NULL);
-
   old_level = intr_disable ();
-  if (!list_empty (&sema->waiters))
-    thread_unblock (
-        list_entry (list_pop_front (&sema->waiters), struct thread, elem));
+  bool needsToYield = false;
+  if (!list_empty (&sema->waiters)) {
+    // list_sort(&sema->waiters, compare_thread_priority_more, NULL);
+    list_sort (&sema->waiters, compare_thread_priority_more, NULL);
+    struct list_elem *elem = list_pop_front (&sema->waiters);
+    struct thread *t = list_entry (elem, struct thread, elem);
+    thread_unblock (t);
+    if (t->priority > thread_current ()->priority) {
+      needsToYield = true;
+    }
+  }
   sema->value++;
   intr_set_level (old_level);
   // sema up disables interrupts, so if it was previously on then critical section is now over.
   if (old_level == INTR_ON) {
     check_priority ();
+  } else if(needsToYield) {
+    intr_yield_on_return();
   }
 }
 
@@ -179,12 +188,12 @@ void lock_init (struct lock *lock)
   sema_init (&lock->semaphore, 1);
 }
 // donates priority to all locks in the chain
-void donate_priority(struct thread *t) {
+void donate_priority(int donor_pri, struct thread *t) {
   int depth = 0; // can't do recursion because of stackoverflow
   struct thread *holder = t;
-  while(holder != NULL && depth++ < 8 && holder->priority < thread_get_priority()) {
+  while(holder != NULL && depth++ < 8 && holder->priority < donor_pri) {
     // set new priority
-    holder->priority = thread_get_priority();
+    holder->priority = donor_pri;
     if(holder->status == THREAD_READY) {
       // re-sort ready list if holder is in ready list
       list_remove(&holder->elem);
@@ -215,7 +224,7 @@ void lock_acquire (struct lock *lock)
   if (lock->holder != NULL) {
     // donate priority
     thread_current ()->waiting = lock;
-    donate_priority(lock->holder);
+    donate_priority(thread_get_priority() , lock->holder);
     // list_sort(ready_list, compare_thread_priority_more, NULL);
   }
   sema_down (&lock->semaphore);
@@ -275,7 +284,7 @@ void lock_release (struct lock *lock)
     }
     elemLock = list_next(elemLock);
   }
-  thread_set_priority(temp_priority);
+  thread_current()->priority = temp_priority;
   
   sema_up (&lock->semaphore);
 }

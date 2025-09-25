@@ -376,7 +376,8 @@ void thread_foreach (thread_action_func *func, void *aux)
 void thread_set_priority (int new_priority)
 {
   thread_current ()->priority = new_priority;
-  check_priority ();
+  if(intr_get_level() == INTR_ON)
+    check_priority ();
 }
 
 /* Returns the current thread's priority. */
@@ -490,6 +491,7 @@ static void init_thread (struct thread *t, const char *name, int priority)
   t->original_priority = priority;
   t->waiting = NULL;
   t->magic = THREAD_MAGIC;
+  list_init(&t->locks);
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
