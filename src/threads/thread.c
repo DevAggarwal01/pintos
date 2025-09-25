@@ -375,9 +375,34 @@ void thread_foreach (thread_action_func *func, void *aux)
 /* Sets the current thread's priority to NEW_PRIORITY. */
 void thread_set_priority (int new_priority)
 {
-  thread_current ()->priority = new_priority;
-  if(intr_get_level() == INTR_ON)
-    check_priority ();
+  enum intr_level old_level = intr_disable();
+  
+  int old_priority = thread_current()->priority;
+  thread_current()->original_priority = new_priority;
+  compute_priority(thread_current());
+  
+  // If this thread's effective priority changed, we need to:
+  // 1. Update any chains where this thread is donating
+  // 2. Check if we should yield
+  
+  if (thread_current()->priority != old_priority) {
+    // Propagate the new priority through donation chains
+    if (thread_current()->waiting != NULL) {
+      chain_donation(thread_current(), thread_current()->waiting);
+    }
+    
+    // Check if we should yield to a higher priority thread
+    if (!list_empty(&ready_list)) {
+      struct thread *top = list_entry(list_front(&ready_list), struct thread, elem);
+      if (top->priority > thread_current()->priority) {
+        intr_set_level(old_level);
+        thread_yield();
+        return;
+      }
+    }
+  }
+  
+  intr_set_level(old_level);
 }
 
 /* Returns the current thread's priority. */
@@ -492,7 +517,7 @@ static void init_thread (struct thread *t, const char *name, int priority)
   t->waiting = NULL;
   t->magic = THREAD_MAGIC;
   list_init(&t->locks);
-
+  list_init(&t->donations); 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
   intr_set_level (old_level);

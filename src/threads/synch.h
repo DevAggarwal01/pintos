@@ -33,6 +33,9 @@ bool lock_held_by_current_thread (const struct lock *);
 
 static struct list ready_list;
 
+void compute_priority(struct thread *t);
+void chain_donation(struct thread *donor, struct lock *lock);
+
 /* Condition variable. */
 struct condition
 {
