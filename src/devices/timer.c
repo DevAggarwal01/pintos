@@ -10,6 +10,14 @@
 
 /* See [8254] for hardware details of the 8254 timer chip. */
 
+struct sleep_node {
+  int64_t wakeup_time;           /* Time to wake up */
+  struct list_elem elem;         /* List element */
+  struct semaphore sema;
+};
+
+static struct list sleep_list;
+
 #if TIMER_FREQ < 19
 #error 8254 timer requires TIMER_FREQ >= 19
 #endif
@@ -36,6 +44,7 @@ void timer_init (void)
 {
   pit_configure_channel (0, 2, TIMER_FREQ);
   intr_register_ext (0x20, timer_interrupt, "8254 Timer");
+  list_init(&sleep_list);
 }
 
 /* Calibrates loops_per_tick, used to implement brief delays. */
@@ -78,6 +87,12 @@ int64_t timer_ticks (void)
    should be a value once returned by timer_ticks(). */
 int64_t timer_elapsed (int64_t then) { return timer_ticks () - then; }
 
+static bool sleep_less (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) {
+  const struct sleep_node *nodeA = list_entry(a, struct sleep_node, elem);
+  const struct sleep_node *nodeB = list_entry(b, struct sleep_node, elem);
+  return nodeA->wakeup_time < nodeB->wakeup_time;
+}
+
 /* Sleeps for approximately TICKS timer ticks.  Interrupts must
    be turned on. */
 void timer_sleep (int64_t ticks)
@@ -85,8 +100,15 @@ void timer_sleep (int64_t ticks)
   int64_t start = timer_ticks ();
 
   ASSERT (intr_get_level () == INTR_ON);
-  while (timer_elapsed (start) < ticks)
-    thread_yield ();
+
+  struct sleep_node node;
+  node.wakeup_time = timer_ticks() + ticks;
+  sema_init(&node.sema, 0);
+
+  enum intr_level old = intr_disable();
+  list_insert_ordered(&sleep_list, &node.elem, sleep_less, NULL); 
+  intr_set_level(old);
+  sema_down(&node.sema);
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -138,6 +160,14 @@ void timer_print_stats (void)
 static void timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
+  while(!list_empty(&sleep_list)) {
+    struct sleep_node *node = list_entry(list_front(&sleep_list), struct sleep_node, elem);
+    if (node->wakeup_time > ticks) {
+      break;
+    }
+    list_pop_front(&sleep_list);
+    sema_up(&node->sema);
+  }
   thread_tick ();
 }
 
