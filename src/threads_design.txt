@@ -88,6 +88,9 @@ Slip days used on this project: 0
 >> clock.  Identify the purpose of each in 25 words or less.
 >>
 
+struct sleep_node
+static struct list sleep_list;
+
 
 ---- ALGORITHMS ----
 
@@ -139,6 +142,11 @@ Slip days used on this project: 0
 >> scheduling and priority donation.  
 >> Identify the purpose of each in 25 words or less.
 >>
+
+struct lock *waiting; /* Lock that thread is waiting on */
+struct list locks; /* List of locks held by thread */
+struct list_elem elem;    /* List element for locks held by a thread */
+
 
 
 ---- ALGORITHMS ----
