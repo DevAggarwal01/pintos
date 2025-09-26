@@ -243,6 +243,20 @@ tid_t thread_create (const char *name, int priority, thread_func *function,
   /* Add to run queue. */
   thread_unblock (t);
 
+  // if (t->priority > thread_current ()->priority) {
+  //   printf("thread %s with priority %d created, yielding CPU from thread %s with priority %d\n",
+  //          t->name, t->priority, thread_current()->name, thread_current()->priority);
+  //   thread_yield ();
+  // }
+
+  enum intr_level old = intr_disable();
+  bool need_yield = (t->priority > thread_current()->priority);
+  intr_set_level(old);
+
+  if(need_yield) {
+    thread_yield();
+  }
+
   return tid;
 }
 
@@ -286,9 +300,16 @@ void thread_unblock (struct thread *t)
   
   // if old_level was INTR_OFF, then it is part of a larger critical section
   // so yielding CPU would break atomicity.
-  if (old_level == INTR_ON) {
-      check_priority();
-  }
+
+  // if(need_yield && old_level == INTR_ON) {
+  //   thread_yield();
+  // }
+
+  // if (old_level == INTR_ON) {
+  //   printf("thread %s with priority %d unblocked, yielding CPU from thread %s with priority %d\n",
+  //          t->name, t->priority, thread_current()->name, thread_current()->priority);
+  //     check_priority();
+  // }
 }
 
 /* Returns the name of the running thread. */
@@ -375,38 +396,39 @@ void thread_foreach (thread_action_func *func, void *aux)
 /* Sets the current thread's priority to NEW_PRIORITY. */
 void thread_set_priority (int new_priority)
 {
-  enum intr_level old_level = intr_disable();
+  struct thread *cur = thread_current();
+  // check new priority is less than top of ready list
+  enum intr_level old_level = intr_disable ();
+  cur->original_priority = new_priority;
+  cur->priority = new_priority;
+  compute_priority(cur);
+  bool need_yield = false;
+  if (!list_empty(&ready_list)) {
+    struct thread *top =
+      list_entry(list_front(&ready_list), struct thread, elem);
+    need_yield = (top->priority > cur->priority);
+  }
+  intr_set_level(old_level);
+
   
-  int old_priority = thread_current()->priority;
-  thread_current()->original_priority = new_priority;
-  compute_priority(thread_current());
-  
-  // If this thread's effective priority changed, we need to:
-  // 1. Update any chains where this thread is donating
-  // 2. Check if we should yield
-  
-  if (thread_current()->priority != old_priority) {
-    // Propagate the new priority through donation chains
-    if (thread_current()->waiting != NULL) {
-      chain_donation(thread_current(), thread_current()->waiting);
-    }
-    
-    // Check if we should yield to a higher priority thread
-    if (!list_empty(&ready_list)) {
-      struct thread *top = list_entry(list_front(&ready_list), struct thread, elem);
-      if (top->priority > thread_current()->priority) {
-        intr_set_level(old_level);
-        thread_yield();
-        return;
-      }
-    }
+  if (need_yield) {
+    thread_yield ();
   }
   
-  intr_set_level(old_level);
+}
+
+void thread_reorder(struct thread *t) {
+  enum intr_level old = intr_disable();
+  if (t->status == THREAD_READY) {
+    /* t is in ready_list by invariant. */
+    list_remove(&t->elem);
+    list_insert_ordered(&ready_list, &t->elem, compare_thread_priority_more, NULL);
+  }
+  intr_set_level(old);
 }
 
 /* Returns the current thread's priority. */
-int thread_get_priority (void) { return thread_current ()->priority; }
+  int thread_get_priority (void) { return thread_current ()->priority; }
 
 /* Sets the current thread's nice value to NICE. */
 void thread_set_nice (int nice UNUSED) { /* Not yet implemented. */ }
@@ -517,7 +539,6 @@ static void init_thread (struct thread *t, const char *name, int priority)
   t->waiting = NULL;
   t->magic = THREAD_MAGIC;
   list_init(&t->locks);
-  list_init(&t->donations); 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
   intr_set_level (old_level);
@@ -532,7 +553,7 @@ static void *alloc_frame (struct thread *t, size_t size)
   ASSERT (size % sizeof (uint32_t) == 0);
 
   t->stack -= size;
-  return t->stack;
+  return t->stack; 
 }
 
 /* Chooses and returns the next thread to be scheduled.  Should

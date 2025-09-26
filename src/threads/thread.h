@@ -77,12 +77,6 @@ typedef int tid_t;
    THREAD_MAGIC.)
 */
 
-struct donation_entry {
-  struct list_elem elem;
-  struct thread *donor;
-  struct lock   *lock;
-  int priority;
-};
 /* The `elem' member has a dual purpose.  It can be an element in
    the run queue (thread.c), or it can be an element in a
    semaphore wait list (synch.c).  It can be used these two ways
@@ -104,7 +98,6 @@ struct thread
   struct list_elem elem; /* List element. */
   struct lock *waiting; /* Lock that thread is waiting on */
   struct list locks; /* List of locks held by thread */
-  struct list donations;
 #ifdef USERPROG
   /* Owned by userprog/process.c. */
   uint32_t *pagedir; /* Page directory. */
@@ -130,6 +123,8 @@ tid_t thread_create (const char *name, int priority, thread_func *, void *);
 
 void thread_block (void);
 void thread_unblock (struct thread *);
+
+void thread_reorder(struct thread *t);
 
 struct thread *thread_current (void);
 tid_t thread_tid (void);
