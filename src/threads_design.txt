@@ -1,0 +1,218 @@
+                        +--------------------+
+                        |        CS 439      |
+                        | PROJECT 1: THREADS |
+                        |   DESIGN DOCUMENT  |
+                        +--------------------+
+
+
+The questions in this design document should reflect the design of the code you
+wrote for the project.  Your grade will reflect both the quality of your answer
+in this document and the quality of the design implementation in your code.  You
+may receive partial credit for answering questions for parts of the project that
+you did not get to implement, but you must indicate in your answer that there is
+no corresponding implementation, or you will not receive any credit.
+
+For each question, you should include both the name of the file(s), function 
+name(s), and the line numbers where the relevant code may be found---both the 
+code that answers the question directly and any function that you refer to in 
+your answer.
+
+These design documents will be completed and submitted as a group.  Please use 
+this document as a guide for design and discuss the questions and their 
+potential answers prior to beginning implementation.
+
+When you have completed your design document, submit it to the Canvas 
+assignment Project 1 Design and Documentation.   
+
+***Your submission must be a text file and each line must not extend past 80 
+characters.  In addition, your submission must contain all of the original 
+material and not exceed 15,500 characters.  The character count will be 
+measured using the Linux command wc.  (Note that rtf files are NOT text files.)
+
+---- Team Information  ----
+
+>> Fill your names, UT EIDs, CS logins, email addresses, and unique numbers:
+
+Name: Dev Aggarwal
+EID: da34882
+CS login: dev4dev
+Email: dev4dev@cs.utexas.edu
+Unique Number: 54895
+
+Name:
+EID:
+CS login:
+Email:
+Unique Number:
+
+Name:
+EID:
+CS login:
+Email:
+Unique Number:
+
+
+Slip days used on this project: 0
+
+
+
+
+---- PRELIMINARIES ----
+
+>> If you have any preliminary comments on your submission or notes for the
+>> TAs,  please give them here.
+>>
+
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+>>
+
+
+>> Please paste a link to your GitLab repo below.
+>> https://github.com/DevAggarwal01/pintos#
+
+
+
+                             ALARM CLOCK
+                             ===========
+
+
+---- DATA STRUCTURES ----
+
+
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', â€˜#defineâ€™, or
+>> enumeration that was necessary for your implementation of alarm
+>> clock.  Identify the purpose of each in 25 words or less.
+>>
+
+
+---- ALGORITHMS ----
+
+
+>> A2: Briefly describe what happens when a thread calls timer_sleep(),
+>> including the steps necessary to wake a thread (hint: timer_interrupt).
+>>
+
+
+>> A3: What steps are taken to minimize the amount of time spent in
+>> the timer interrupt handler?  
+>>
+
+
+---- SYNCHRONIZATION ----
+
+
+>> A4: How are race conditions avoided when multiple threads call
+>> timer_sleep() simultaneously?  Describe the race conditions.
+>>
+
+
+>> A5: How are race conditions avoided when a timer interrupt occurs
+>> during a call to timer_sleep()?  Describe the race conditions.
+>>
+
+
+---- RATIONALE ----
+
+
+>> A6: Why did you choose this design?  In what ways is it superior to
+>> another design you considered?  Be certain to compare between two
+>> working designs.
+>>
+
+
+
+
+                         PRIORITY SCHEDULING
+                         ===================
+
+
+---- DATA STRUCTURES ----
+
+
+>> B1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', â€˜#defineâ€™, or
+>> enumeration that was necessary for your implementation of priority
+>> scheduling and priority donation.  
+>> Identify the purpose of each in 25 words or less.
+>>
+
+
+---- ALGORITHMS ----
+
+
+>> B2: How do you ensure that the highest priority thread waiting for
+>> a lock, semaphore, or condition variable wakes up first?  
+>> Explain for all three.
+>>
+
+
+>> B3: Describe the sequence of events when a call to lock_acquire()
+>> causes a priority donation.  How is nested donation handled?
+>>
+
+
+>> B4: Describe the sequence of events when lock_release() is called
+>> on a lock on which a higher-priority thread is waiting.  What happens to
+>> the priority of the thread releasing the lock?
+>>
+
+
+---- SYNCHRONIZATION ----
+
+
+>> B5: Describe a potential race in thread_set_priority() and explain
+>> how your implementation avoids it.  Can you use a lock to avoid
+>> this race?  Defend your answer.
+>>
+
+
+---- RATIONALE ----
+
+
+>> B6: Why did you choose this design for your priority scheduling and
+>> donation?  In what ways is it superior to another design you considered?
+>> Please make certain you discuss both priority scheduling and donation, and
+>> be certain to compare against working designs.
+>>
+
+
+
+
+                           SURVEY QUESTIONS
+                           ================
+
+
+Answering these questions is optional, but it will help us improve the
+course in future semesters.  Feel free to tell us anything you
+want--these questions are just to spur your thoughts.  You may also
+choose to respond anonymously in the course evaluations at the end of
+the semester.
+
+
+>> In your opinion, was this assignment, or any one of the two problems
+>> in it, too easy or too hard?  Did it take too long or too little time?
+>>
+
+
+>> Did you find that working on a particular part of the assignment gave
+>> you greater insight into some aspect of OS design?
+>>
+
+
+>> Is there some particular fact or hint we should give students in
+>> future semesters to help them solve the problems?  Conversely, did you
+>> find any of our guidance to be misleading?
+>>
+
+
+>> Do you have any suggestions for the TAs to more effectively assist
+>> students, either for future semesters or the remaining projects?
+>>
+
+
+>> Any other comments?
+>>
