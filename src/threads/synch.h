@@ -33,8 +33,7 @@ bool lock_held_by_current_thread (const struct lock *);
 
 void compute_priority(struct thread *t);
 
-static struct list ready_list;
-
+// static struct list ready_list;
 
 /* Condition variable. */
 struct condition

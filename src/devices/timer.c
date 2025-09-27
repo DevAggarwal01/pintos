@@ -10,12 +10,17 @@
 
 /* See [8254] for hardware details of the 8254 timer chip. */
 
+// data structure to keep track of sleeping threads
 struct sleep_node {
-  int64_t wakeup_time;           /* Time to wake up */
-  struct list_elem elem;         /* List element */
-  struct semaphore sema;
+    // the time to wake up the thread
+    int64_t wakeup_time;
+    // list element to be part of a list
+    struct list_elem elem;
+    // semaphore to block/wake up the thread
+    struct semaphore sema;
 };
 
+// the list of sleeping threads
 static struct list sleep_list;
 
 #if TIMER_FREQ < 19
@@ -44,6 +49,7 @@ void timer_init (void)
 {
   pit_configure_channel (0, 2, TIMER_FREQ);
   intr_register_ext (0x20, timer_interrupt, "8254 Timer");
+  // initialize the list of sleeping threads
   list_init(&sleep_list);
 }
 
@@ -87,28 +93,41 @@ int64_t timer_ticks (void)
    should be a value once returned by timer_ticks(). */
 int64_t timer_elapsed (int64_t then) { return timer_ticks () - then; }
 
-static bool sleep_less (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) {
-  const struct sleep_node *nodeA = list_entry(a, struct sleep_node, elem);
-  const struct sleep_node *nodeB = list_entry(b, struct sleep_node, elem);
-  return nodeA->wakeup_time < nodeB->wakeup_time;
+
+/**
+ * Comparison function for sleep_list, to order by wakeup_time.
+ * 
+ * Note that a list_less_func must compare the value of two list elements A and B, given
+ * auxiliary data AUX (in this case, this is unused). It returns true if A should wake up
+ * before B, or false if A should wake up after or at the same time as B. 
+ */
+static bool sleep_less(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) {
+    // get the sleep nodes for both the sleeping threads
+    struct sleep_node* nodeA = list_entry(a, struct sleep_node, elem);
+    struct sleep_node* nodeB = list_entry(b, struct sleep_node, elem);
+    // compare their wake up times
+    return nodeA->wakeup_time < nodeB->wakeup_time;
 }
 
 /* Sleeps for approximately TICKS timer ticks.  Interrupts must
    be turned on. */
 void timer_sleep (int64_t ticks)
 {
-  int64_t start = timer_ticks ();
-
-  ASSERT (intr_get_level () == INTR_ON);
-
-  struct sleep_node node;
-  node.wakeup_time = timer_ticks() + ticks;
-  sema_init(&node.sema, 0);
-
-  enum intr_level old = intr_disable();
-  list_insert_ordered(&sleep_list, &node.elem, sleep_less, NULL); 
-  intr_set_level(old);
-  sema_down(&node.sema);
+    // get the start time (the time at which the thread should start sleeping) and assert that interrupts are on
+    int64_t start = timer_ticks();
+    ASSERT (intr_get_level() == INTR_ON);
+    // have a sleep node for this thread, set the wake up time and initialize the semaphore
+    struct sleep_node node;
+    node.wakeup_time = start + ticks;
+    sema_init(&node.sema, 0);
+    // disable interrupts to avoid concurrent modification of sleep_list here
+    enum intr_level old = intr_disable();
+    // insert the node into the sleep list in sorted order of wakeup time
+    list_insert_ordered(&sleep_list, &node.elem, sleep_less, NULL); 
+    // re-enable interrupts here
+    intr_set_level(old);
+    // block the thread on the semaphore
+    sema_down(&node.sema);
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -159,16 +178,20 @@ void timer_print_stats (void)
 /* Timer interrupt handler. */
 static void timer_interrupt (struct intr_frame *args UNUSED)
 {
-  ticks++;
-  while(!list_empty(&sleep_list)) {
-    struct sleep_node *node = list_entry(list_front(&sleep_list), struct sleep_node, elem);
-    if (node->wakeup_time > ticks) {
-      break;
+    ticks++;
+    // wake up all threads whose wakeup time is <= current time
+    while (!list_empty(&sleep_list)) {
+        // get the sleep node at the front of the list
+        struct sleep_node *node = list_entry(list_front(&sleep_list), struct sleep_node, elem);
+        // nothing to do if the wakeup time is in the future
+        if (node->wakeup_time > ticks) {
+            break;
+        }
+        // remove the node from the sleep list and up its semaphore to wake up
+        list_pop_front(&sleep_list);
+        sema_up(&node->sema);
     }
-    list_pop_front(&sleep_list);
-    sema_up(&node->sema);
-  }
-  thread_tick ();
+    thread_tick();
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer
