@@ -11,7 +11,7 @@
 /* See [8254] for hardware details of the 8254 timer chip. */
 
 // data structure to keep track of sleeping threads
-struct sleep_node {
+struct sleeping_thread_struct {
     // the time to wake up the thread
     int64_t wakeup_time;
     // list element to be part of a list
@@ -19,8 +19,7 @@ struct sleep_node {
     // semaphore to block/wake up the thread
     struct semaphore sema;
 };
-
-// the list of sleeping threads
+// the list of sleeping threads (sorted by wakeup time)
 static struct list sleep_list;
 
 #if TIMER_FREQ < 19
@@ -102,9 +101,9 @@ int64_t timer_elapsed (int64_t then) { return timer_ticks () - then; }
  * before B, or false if A should wake up after or at the same time as B. 
  */
 static bool sleep_less(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) {
-    // get the sleep nodes for both the sleeping threads
-    struct sleep_node* nodeA = list_entry(a, struct sleep_node, elem);
-    struct sleep_node* nodeB = list_entry(b, struct sleep_node, elem);
+    // get the sleeping thread structuress for both the sleeping threads
+    struct sleeping_thread_struct* nodeA = list_entry(a, struct sleeping_thread_struct, elem);
+    struct sleeping_thread_struct* nodeB = list_entry(b, struct sleeping_thread_struct, elem);
     // compare their wake up times
     return nodeA->wakeup_time < nodeB->wakeup_time;
 }
@@ -116,8 +115,8 @@ void timer_sleep (int64_t ticks)
     // get the start time (the time at which the thread should start sleeping) and assert that interrupts are on
     int64_t start = timer_ticks();
     ASSERT (intr_get_level() == INTR_ON);
-    // have a sleep node for this thread, set the wake up time and initialize the semaphore
-    struct sleep_node node;
+    // have a sleeping thread structures for this thread, set the wake up time and initialize the semaphore
+    struct sleeping_thread_struct node;
     node.wakeup_time = start + ticks;
     sema_init(&node.sema, 0);
     // disable interrupts to avoid concurrent modification of sleep_list here
@@ -181,8 +180,8 @@ static void timer_interrupt (struct intr_frame *args UNUSED)
     ticks++;
     // wake up all threads whose wakeup time is <= current time
     while (!list_empty(&sleep_list)) {
-        // get the sleep node at the front of the list
-        struct sleep_node *node = list_entry(list_front(&sleep_list), struct sleep_node, elem);
+        // get the sleeping thread structures at the front of the list
+        struct sleeping_thread_struct *node = list_entry(list_front(&sleep_list), struct sleeping_thread_struct, elem);
         // nothing to do if the wakeup time is in the future
         if (node->wakeup_time > ticks) {
             break;
