@@ -59,7 +59,7 @@ Slip days used on this project: 1
     We've changed the thread struct to help us with our implementation. Other 
     than that, we've changed very little of the provided code outside of the
     methods that required change and any code we wrote ourselves.
-    
+
 
 >> Please cite any offline or online sources you consulted while
 >> preparing your submission, other than the Pintos documentation, course
@@ -93,15 +93,13 @@ Slip days used on this project: 1
         struct semaphore sema;
     };
 
-    PURPOSE: Holds a sleeping thread's wakeup time, a list element so the
-    thread can be stored in the sleep_list struct, and a per-thread semaphore
-    used to block and later wake the sleeping thread.
+    PURPOSE: Holds a sleeping thread's wakeup time, a list element for the
+    sleep_list struct, and a per-thread semaphore used to block and wake the thread.
 
     static struct list sleep_list;
 
     PURPOSE: Global ordered list of sleeping_thread_struct nodes.  The
-    front element is the thread with the earliest wakeup time, allowing 
-    the interrupt handler to check only the head (line 184).
+    front element is the thread with the earliest wakeup time.
 
 
 ---- ALGORITHMS ----
@@ -201,12 +199,26 @@ Slip days used on this project: 1
 >> enumeration that was necessary for your implementation of priority
 >> scheduling and priority donation.  
 >> Identify the purpose of each in 25 words or less.
->>
 
-struct lock *waiting; /* Lock that thread is waiting on */
-struct list locks; /* List of locks held by thread */
-struct list_elem elem;    /* List element for locks held by a thread */
+    struct thread {
+        tid_t tid;                 
+        enum thread_status status;
+        char name[16];
+        uint8_t *stack;
+        int priority;
+        int original_priority; // THIS IS NEW
+        struct list_elem allelem;
+        struct list_elem elem;
+        struct lock* waiting; // THIS IS NEW
+        struct list locks; // THIS IS NEW
+        #ifdef USERPROG
+            uint32_t *pagedir;
+        #endif
+        unsigned magic;
+    };
 
+    PURPOSE: To make dealing with priority scheduling and priority donation
+    easier to work with in lot of ways (described below).
 
 
 ---- ALGORITHMS ----
@@ -217,16 +229,50 @@ struct list_elem elem;    /* List element for locks held by a thread */
 >> Explain for all three.
 >>
 
+    For semaphores: the implementation keeps a waiters list ordered by
+    priority and always unblocks the front (highest-priority) waiter. 
+    See sema_down/sema_up in synch.c: waiters are inserted with
+    list_insert_ordered and sema_up= picks the front waiter to unblock. 
+    
+    For locks: lock_acquire uses the lock's semaphore, so the same 
+    ordered-waiter behavior in semaphores guarantees the highest priority waiter
+    acquires the lock next (in synch.c). 
+    
+    For condition variables: we use a semaphore_elem per waiter and maintain 
+    cond->waiters ordered by the highest priority waiting thread (see the 
+    cond_sema_more method and cond_signal method in synch.c); the cond_signal
+    method wakes the semaphore whose waiter has the highest priority.
+
 
 >> B3: Describe the sequence of events when a call to lock_acquire()
 >> causes a priority donation.  How is nested donation handled?
 >>
+
+    When a higher-priority thread H attempts lock_acquire(L) and sets
+    L->holder == M (a lower-priority thread), the current thread sets
+    itself as waiting (a field) on L and calls donate_priority(H, M, L). This
+    donation routine raises M->priority to H->priority if needed and
+    reorders lists so the thread can run sooner. If M itself is blocked and is
+    waiting on another lock, the donation loop follows M->waiting to this lock's
+    holder and propagates the donation further. This chain-traversal helps
+    implements nested donation; the highest waiting priority flows along
+    the chain of locks to every holder on the path until no receiver has a
+    lower priority than the donor (thus successfully donating priority).
 
 
 >> B4: Describe the sequence of events when lock_release() is called
 >> on a lock on which a higher-priority thread is waiting.  What happens to
 >> the priority of the thread releasing the lock?
 >>
+
+    On lock_release, the holder removes lock from its locks list (which is an
+    added field) and clears lock->holder. The releasing thread then calls 
+    compute_priority to recompute its effective priority from original_priority
+    and any remaining donations arising from threads waiting on locks it still
+    holds. Semaphore waiters are kept in priority order, so sema_up always wakes
+    the thread at the front of the list, which is the highest‑priority waiter.
+    Thus the releaser's priority drops (if appropriate) back toward its original
+    value or to the highest donation from other locks it continues to hold.
 
 
 ---- SYNCHRONIZATION ----
@@ -237,7 +283,17 @@ struct list_elem elem;    /* List element for locks held by a thread */
 >> this race?  Defend your answer.
 >>
 
-
+    A race can occur if a thread changes its base priority while other
+    threads are concurrently donating to it or while the thread holds
+    locks whose waiters are being inspected. To avoid races we perform
+    priority updates and recomputation with interrupts disabled in
+    thread_set_priority and in compute_priority (see thread.c and synch.c
+    respectively). Disabling interrupts makes the update atomic considering
+    the timer and other interrupt-driven code that might examine or modify
+    scheduling lists. A lock is not appropriate here because priority changes
+    are internal to the scheduler and acquiring locks while changing scheduling
+    state can hurt donation; disabling interrupts is the safer approach.
+    
 ---- RATIONALE ----
 
 
@@ -245,7 +301,15 @@ struct list_elem elem;    /* List element for locks held by a thread */
 >> donation?  In what ways is it superior to another design you considered?
 >> Please make certain you discuss both priority scheduling and donation, and
 >> be certain to compare against working designs.
->>
+
+    We chose to use ordered waiter lists with explicit donation because waiters
+    are kept sorted so the highest-priority waiter runs next, and when a high-priority
+    thread blocks on a lock we propagate its priority along the chain of holders 
+    (helpers in synch.c do this) and restore the original priority on release. This
+    means that wakeups stay fast.  Compared with doing nothing (which is simple but
+    allows higher-priority threads to sometimes strave) or with using a single global
+    scheduler lock (which would avoid races but hurt concurrency), this design gives a
+    good balance. Ordered wait-lists ensure notify/unblock work is cheap.
 
 
 
