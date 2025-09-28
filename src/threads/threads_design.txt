@@ -181,7 +181,7 @@ Slip days used on this project: 1
     I chose the per-thread struct plus ordered-list design because it moves work out of the
     interrupt handler and keeps the interrupt path minimal. By ordering at timer_sleep time
     (line 125), timer_interrupt only checks the head(s) on each tick and can stop quickly. 
-    Compared to a imple unsorted list scanned every tick, this design drastically reduces
+    Compared to a simple unsorted list scanned every tick, this design drastically reduces
     work at interrupt time at the cost of slightly more work during sleep calls. Busy
     waiting (the original implementation) is another simpler option but wastes CPU time and
     harms scheduler fairness. Our approach is efficient, safe, and easy to reason about.
@@ -293,7 +293,7 @@ Slip days used on this project: 1
     scheduling lists. A lock is not appropriate here because priority changes
     are internal to the scheduler and acquiring locks while changing scheduling
     state can hurt donation; disabling interrupts is the safer approach.
-    
+
 ---- RATIONALE ----
 
 
