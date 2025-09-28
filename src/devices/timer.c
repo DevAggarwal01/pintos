@@ -100,8 +100,8 @@ int64_t timer_elapsed (int64_t then) { return timer_ticks () - then; }
  * auxiliary data AUX (in this case, this is unused). It returns true if A should wake up
  * before B, or false if A should wake up after or at the same time as B. 
  */
-static bool sleep_less(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) {
-    // get the sleeping thread structuress for both the sleeping threads
+static bool compare_wakeup_time(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) {
+    // get the sleeping thread structures for both the sleeping threads
     struct sleeping_thread_struct* nodeA = list_entry(a, struct sleeping_thread_struct, elem);
     struct sleeping_thread_struct* nodeB = list_entry(b, struct sleeping_thread_struct, elem);
     // compare their wake up times
@@ -115,14 +115,14 @@ void timer_sleep (int64_t ticks)
     // get the start time (the time at which the thread should start sleeping) and assert that interrupts are on
     int64_t start = timer_ticks();
     ASSERT (intr_get_level() == INTR_ON);
-    // have a sleeping thread structures for this thread, set the wake up time and initialize the semaphore
+    // have a sleeping thread structure for this thread, set the wake up time and initialize the semaphore
     struct sleeping_thread_struct node;
     node.wakeup_time = start + ticks;
     sema_init(&node.sema, 0);
     // disable interrupts to avoid concurrent modification of sleep_list here
     enum intr_level old = intr_disable();
     // insert the node into the sleep list in sorted order of wakeup time
-    list_insert_ordered(&sleep_list, &node.elem, sleep_less, NULL); 
+    list_insert_ordered(&sleep_list, &node.elem, compare_wakeup_time, NULL); 
     // re-enable interrupts here
     intr_set_level(old);
     // block the thread on the semaphore
@@ -180,7 +180,7 @@ static void timer_interrupt (struct intr_frame *args UNUSED)
     ticks++;
     // wake up all threads whose wakeup time is <= current time
     while (!list_empty(&sleep_list)) {
-        // get the sleeping thread structures at the front of the list
+        // get the sleeping thread structure at the front of the list
         struct sleeping_thread_struct *node = list_entry(list_front(&sleep_list), struct sleeping_thread_struct, elem);
         // nothing to do if the wakeup time is in the future
         if (node->wakeup_time > ticks) {
