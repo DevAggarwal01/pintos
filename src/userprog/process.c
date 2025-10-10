@@ -522,6 +522,7 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
  * word-align, push argv pointers, push argv, push argc, and push fake return addr.
  */
 static bool setup_stack (const char *cmdline, void **esp) {
+    // TO DO: CHECK FOR STACK OVERFLOW HERE IN ALL CASES (I.E., SP GOES PAST A PAGE BOUNDARY)
     // allocate a page for the stack
     uint8_t *kpage;
     kpage = palloc_get_page(PAL_USER | PAL_ZERO);
