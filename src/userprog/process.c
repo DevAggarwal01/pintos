@@ -525,7 +525,7 @@ static bool setup_stack (const char *cmdline, void **esp) {
     // TO DO: CHECK FOR STACK OVERFLOW HERE IN ALL CASES (I.E., SP GOES PAST A PAGE BOUNDARY)
     // allocate a page for the stack
     uint8_t *kpage;
-    kpage = palloc_get_page(PAL_USER | PAL_ZERO);
+    kpage = palloc_get_page(PAL_USER | PAL_ZERO); // flags
     if (kpage == NULL) {
         return false;
     }
@@ -555,7 +555,7 @@ static bool setup_stack (const char *cmdline, void **esp) {
     // push argument strings onto stack in reverse order
     char *arg_addrs[128]; // assume no more than 128 args; mentioned in project specifications
     for (int i = argc - 1; i >= 0; i--) {
-        sp -= strlen(argv[i]) + 1;
+        sp -= strlen(argv[i]) + 1; // + 1 for null terminator
         memcpy(sp, argv[i], strlen(argv[i]) + 1);
         arg_addrs[i] = (char *) sp;
     }
@@ -585,7 +585,7 @@ static bool setup_stack (const char *cmdline, void **esp) {
     // set the stack pointer
     *esp = sp;
     // hex dump for debugging (disabled by default; enable if needed)
-    hex_dump((uintptr_t) sp, sp, (char *) PHYS_BASE - (char*) sp, true);
+    // hex_dump((uintptr_t) sp, sp, (char *) PHYS_BASE - (char*) sp, true);
     // free the temporary command line copy and return success
     palloc_free_page(cmd_copy);
     return true;
