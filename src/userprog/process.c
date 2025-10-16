@@ -22,23 +22,15 @@
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 
-/**
- * Struct to track a relationship between a parent and a child process.
- * TO DO: UNCONVINCED THAT THIS NEEDS SOME OF THESE FIELDS (EXITED? TWO SEMAPHORES?)
- */
-struct child_record {
-    tid_t parent_tid;               // parent thread ID
-    tid_t child_tid;                // child thread ID
-    int exit_code;                  // exit status
-    bool exited;                    // if the child has exited
-    bool waited;                    // if the parent has already waited
-    struct semaphore start_sema;    // child waits until parent finishes setup
-    struct semaphore exit_sema;     // parent waits until child exits
-    struct list_elem elem;          // element for global list
-};
 
 // a list of all child records 
 static struct list child_list = LIST_INITIALIZER(child_list);
+
+struct start_info {
+  char *fn_copy;
+  struct child_record *rec;
+  struct thread *parent;
+};
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -60,6 +52,12 @@ tid_t process_execute (const char *file_name) {
         palloc_free_page (fn_copy);
         return TID_ERROR;
     }
+    struct start_info *info = palloc_get_page(0);
+    if (info == NULL) {
+        palloc_free_page (fn_copy);
+        palloc_free_page (rec);
+        return TID_ERROR;
+    }
     // initialize the record
     rec->parent_tid = thread_tid();    // current thread is parent
     rec->child_tid = -1;                // placeholder until thread_create returns
@@ -71,11 +69,17 @@ tid_t process_execute (const char *file_name) {
     // add the record to the list of child records
     // TO DO: UGH. BAD BAD BAD. PAINS ME TO SEE. INSERT TO SET UP LIST IN SORTED ORDER.
     list_push_back (&child_list, &rec->elem);
+    struct thread *parent = thread_current();
+    list_push_back (&parent->children, &rec->elem_child);
+    info->fn_copy = fn_copy;
+    info->rec = rec;
+    info->parent = parent;
+    
     // extract the first word from file_name
     char *save_ptr;
     char *program = strtok_r((char *) file_name, " ", &save_ptr);
     // create a new thread to execute file_name
-    tid = thread_create (program, PRI_DEFAULT, start_process, fn_copy);
+    tid = thread_create (program, PRI_DEFAULT, start_process, info);
     if (tid == TID_ERROR) {
         // thread creation failed, so remove record & free pages
         list_remove (&rec->elem);
@@ -94,22 +98,28 @@ tid_t process_execute (const char *file_name) {
 
 /* A thread function that loads a user process and starts it
    running. */
-static void start_process (void *file_name_){
+static void start_process (void *info){
+    struct thread *t = thread_current();
+    struct start_info *start_info = info;
+    char *file_name = start_info->fn_copy;
+
+    t->parent = start_info->parent;
+    t->child_record = start_info->rec;
+    printf ("(%s) begin\n", t->name);
     // the file name (full command line) is passed in via file_name_
-    char *file_name = file_name_;
     struct intr_frame if_;
     bool success;
     // find this thread's own child record in the list of records
     // TO DO: UGH. BAD BAD BAD. PAINS ME TO SEE. REMOVE AFTER LIST SET UP IN SORTED ORDER.
-    struct child_record *rec = NULL;
-    tid_t my_tid = thread_tid();
-    for (struct list_elem *e = list_begin(&child_list); e != list_end(&child_list); e = list_next(e)) {
-        struct child_record *c = list_entry(e, struct child_record, elem);
-        if (c->child_tid == my_tid) {
-            rec = c;
-            break;
-        }
-    }
+    struct child_record *rec = t->child_record;
+    // tid_t my_tid = thread_tid();
+    // for (struct list_elem *e = list_begin(&child_list); e != list_end(&child_list); e = list_next(e)) {
+    //     struct child_record *c = list_entry(e, struct child_record, elem);
+    //     if (c->child_tid == my_tid) {
+    //         rec = c;
+    //         break;
+    //     }
+    // }
     // wait until parent signals that setup is complete
     if (rec != NULL) {
         sema_down(&rec->start_sema);
@@ -143,17 +153,25 @@ static void start_process (void *file_name_){
    immediately, without waiting. */
 int process_wait (tid_t child_tid) { 
     // get this thread's TID
+    struct thread *parent = thread_current();
     tid_t my_tid = thread_tid();
     struct child_record *rec = NULL;
     // find the record for this parent-child pair
     // TO DO: UGH. BAD BAD BAD. PAINS ME TO SEE. REMOVE AFTER LIST SET UP IN SORTED ORDER.
-    for (struct list_elem *e = list_begin(&child_list); e != list_end(&child_list); e = list_next(e)) {
-        struct child_record *c = list_entry (e, struct child_record, elem);
-        if (c->parent_tid == my_tid && c->child_tid == child_tid) {
-            rec = c;
-            break;
+    // for (struct list_elem *e = list_begin(&child_list); e != list_end(&child_list); e = list_next(e)) {
+    //     struct child_record *c = list_entry (e, struct child_record, elem);
+    //     if (c->parent_tid == my_tid && c->child_tid == child_tid) {
+    //         rec = c;
+    //         break;
+    //     }
+    // }
+    for (struct list_elem *e = list_begin(&parent->children); e != list_end(&parent->children); e = list_next(e)) {
+        struct child_record *c = list_entry(e, struct child_record, elem_child);
+        if (c->child_tid == child_tid) {
+            rec = c; break;
         }
     }
+    
     // if no such child or already waited, return -1
     if (rec == NULL || rec->waited) {
         return -1;
@@ -161,10 +179,11 @@ int process_wait (tid_t child_tid) {
     // mark as waited (only one successful wait allowed)
     rec->waited = true;
     // wait until child exits
-    sema_down(&rec->exit_sema);
+    if(!rec->exited) sema_down(&rec->exit_sema);
     // capture exit status and remove/free the record
     int status = rec->exit_code;
     list_remove(&rec->elem);
+    list_remove(&rec->elem_child);
     palloc_free_page(rec);
     // return the child's exit status
     return status;
@@ -177,17 +196,22 @@ void process_exit (void) {
     uint32_t *pd;
     // record exit status in the corresponding child record, so parent can get it
     tid_t my_tid = thread_tid();
-    for (struct list_elem *e = list_begin(&child_list); e != list_end(&child_list); e = list_next(e)) {
-        struct child_record *c = list_entry (e, struct child_record, elem);
-        if (c->child_tid == my_tid) {
-            // fill exit info; for now, exit status is always 0
-            // TO DO: CHANGE EXITE LATER LATER? UNSURE ABOUT THIS ONE.
-            c->exit_code = 0;
-            c->exited = true;
-            // wake up the waiting parent, if any
-            sema_up (&c->exit_sema);
-            break;
-        }
+    // for (struct list_elem *e = list_begin(&child_list); e != list_end(&child_list); e = list_next(e)) {
+    //     struct child_record *c = list_entry (e, struct child_record, elem);
+    //     if (c->child_tid == my_tid) {
+    //         // fill exit info; for now, exit status is always 0
+    //         // TO DO: CHANGE EXITE LATER LATER? UNSURE ABOUT THIS ONE.
+    //         c->exit_code = 0;
+    //         c->exited = true;
+    //         // wake up the waiting parent, if any
+    //         sema_up (&c->exit_sema);
+    //         break;
+    //     }
+    // }
+    if (cur->child_record && !cur->child_record->exited) {
+        cur->child_record->exit_code = cur->exit_code;
+        cur->child_record->exited = true;
+        sema_up(&cur->child_record->exit_sema);
     }
 
     /* Destroy the current process's page directory and switch back
@@ -207,7 +231,7 @@ void process_exit (void) {
     }
     // for now, just print a message with exit status 0
     // TO DO: CHANGE EXIT STATUS LATER LATER? UNSURE ABOUT THIS ONE.
-    printf("%s: exit(%d)\n", cur->name, 0);
+    printf("%s: exit(%d)\n", cur->name, cur->exit_code);
 }
 
 /* Sets up the CPU for running user code in the current

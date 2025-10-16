@@ -497,6 +497,10 @@ static void init_thread (struct thread *t, const char *name, int priority) {
     t->stack = (uint8_t *) t + PGSIZE;
     t->priority = priority;
     t->original_priority = priority; // new, added to thread structure
+    list_init(&t->children); // new, added to thread structure
+    t->parent = NULL;
+    t->child_record = NULL;      // if you use this pointer
+    t->exit_code = 0;
     t->waiting = NULL; // new, added to thread structure
     t->magic = THREAD_MAGIC;
     list_init(&t->locks); // new, added to thread structure
