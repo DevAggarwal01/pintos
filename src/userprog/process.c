@@ -230,7 +230,6 @@ void process_exit (void) {
         pagedir_destroy (pd);
     }
     // for now, just print a message with exit status 0
-    // TO DO: CHANGE EXIT STATUS LATER LATER? UNSURE ABOUT THIS ONE.
     printf("%s: exit(%d)\n", cur->name, cur->exit_code);
 }
 
