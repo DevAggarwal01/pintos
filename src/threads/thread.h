@@ -86,6 +86,12 @@ typedef int tid_t;
    
 struct child_record; // forward declaration to avoid circular dependency
 
+struct fd_entry {
+  int fd;               /* file descriptor (ex. 2,3,4,...) */
+  struct file *f;       /*file pointer*/
+  struct list_elem elem;      /* in thread->fds list */
+};
+
    struct thread
 {
   /* Owned by thread.c. */
@@ -107,6 +113,10 @@ struct child_record; // forward declaration to avoid circular dependency
    struct child_record *child_record;
    struct list children;
    struct thread *parent;
+
+   struct list fds;     /* List of file descriptors */
+   int next_fd;     /* Next available file descriptor number */
+   struct file *exec_file; /*deny writes to executable files*/
 
 #ifdef USERPROG
   /* Owned by userprog/process.c. */

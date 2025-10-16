@@ -105,7 +105,6 @@ static void start_process (void *info){
 
     t->parent = start_info->parent;
     t->child_record = start_info->rec;
-    printf ("(%s) begin\n", t->name);
     // the file name (full command line) is passed in via file_name_
     struct intr_frame if_;
     bool success;
@@ -214,6 +213,8 @@ void process_exit (void) {
         sema_up(&cur->child_record->exit_sema);
     }
 
+    // TODO close all open files, free file descriptors
+
     /* Destroy the current process's page directory and switch back
         to the kernel-only page directory. */
     pd = cur->pagedir;
@@ -229,8 +230,6 @@ void process_exit (void) {
         pagedir_activate (NULL);
         pagedir_destroy (pd);
     }
-    // for now, just print a message with exit status 0
-    printf("%s: exit(%d)\n", cur->name, cur->exit_code);
 }
 
 /* Sets up the CPU for running user code in the current

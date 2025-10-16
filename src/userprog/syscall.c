@@ -8,6 +8,7 @@
 #include "userprog/process.h"
 #include "filesys/filesys.h"
 #include "threads/synch.h"
+#include "filesys/file.h"
 
 
 #include <string.h>
@@ -71,6 +72,31 @@ static char *copy_string (char *str) {
   }
 }
 
+/* creates file descriptors and adds to fds list */
+static struct fd_entry *create_fd(struct file *file) {
+  struct thread *t = thread_current();
+  struct fd_entry *fd_entry = palloc_get_page(0);
+  if (fd_entry == NULL) {
+    return NULL;
+  }
+  fd_entry->fd = t->next_fd++;
+  fd_entry->f = file;
+  list_push_back(&t->fds, &fd_entry->elem);
+  return fd_entry;
+}
+
+static struct fd_entry *find_fd(int fd) {
+  struct thread *t = thread_current();
+  struct list_elem *e;
+  for (e = list_begin(&t->fds); e != list_end(&t->fds); e = list_next(e)) {
+    struct fd_entry *fd_entry = list_entry(e, struct fd_entry, elem);
+    if (fd_entry->fd == fd) {
+      return fd_entry;
+    }
+  }
+  return NULL;
+}
+
 static void system_exit (int status)
 {
   struct thread *t = thread_current();
@@ -80,6 +106,8 @@ static void system_exit (int status)
     t->child_record->exited = true;
     sema_up(&t->child_record->exit_sema);
   }
+  printf("%s: exit(%d)\n", t->name, status);
+  process_exit();
   thread_exit();
 }
 
@@ -121,7 +149,7 @@ static void syscall_handler (struct intr_frame *f UNUSED)
         if(cmd_linePtr == NULL) {
           system_exit(-1);
         }
-        char *cmd_line = copy_string(cmd_linePtr);
+        char *cmd_line = copy_string(cmd_linePtr); // because its in user memory but not kernel memory
         if (cmd_line == NULL) {
           system_exit(-1);
         }
@@ -175,28 +203,140 @@ static void syscall_handler (struct intr_frame *f UNUSED)
 
     }
     case SYS_OPEN: { // int open (const char *file)
-      const char *file;
-      copy_data(&file, sp+4, sizeof(const char *));
+      const char *fileNamePtr;
+      copy_data(&fileNamePtr, sp+4, sizeof(const char *));
+      if(fileNamePtr == NULL) {
+        system_exit(-1);
+      }
+      char *fileName = copy_string((char *)fileNamePtr);
+      if(fileName == NULL || fileName == '\0') {
+        palloc_free_page(fileName);
+        f->eax = -1;
+        return;
+      }
+      // open the file
       lock_acquire(&file_lock);
-      struct file *filePtr = filesys_open(file);
+      struct file *file = filesys_open(fileName);
       lock_release(&file_lock);
-      f->eax = (int) filePtr;
-      // TODO need to somehow return a file descriptor instead of a file pointer
+      if (file == NULL) {
+        palloc_free_page(fileName);
+        f->eax = -1;
+        break;
+      }
+      struct fd_entry *fd = create_fd(file);
+      
+      if (fd == NULL) {
+        f->eax = -1;
+        file_close(file); // close the file if we couldn't create fd_entry
+        palloc_free_page(fileName);
+        break;
+      }
+      f->eax = fd->fd;
+      palloc_free_page(fileName);
       break;
     }
     case SYS_FILESIZE: { // int filesize (int fd)
+      int fd;
+      copy_data(&fd, sp+4, sizeof(int));
+      struct thread *t = thread_current();
+      struct list_elem *e;
+      struct fd_entry *fd_entry = find_fd(fd);
+      if (fd_entry == NULL) {
+        f->eax = -1;
+        break;
+      }
+      lock_acquire(&file_lock);
+      f->eax = file_length(fd_entry->f);
+      lock_release(&file_lock);
       break;
     }
     case SYS_READ: { // int read (int fd, void *buffer, unsigned size)
       // read from a file
-      // (not implemented)
+      int fd;
+      void *buffer;
+      unsigned size;
+      copy_data(&fd, sp+4, sizeof(int));
+      copy_data(&buffer, sp+8, sizeof(void *));
+      copy_data(&size, sp+12, sizeof(unsigned));
+      if (buffer == NULL && size > 0) {
+        f->eax = -1;
+        system_exit(-1);
+        break;
+      }
+      if(fd == 0) { // read from keyboard
+        for (unsigned i = 0; i < size; i++) {
+          ((char *)buffer)[i] = input_getc();
+        }
+        f->eax = size;
+        break;
+      }
+      struct fd_entry *fd_entry = find_fd(fd);
+      if (fd_entry == NULL) {
+        f->eax = -1;
+        break;
+      }
+      lock_acquire(&file_lock);
+      f->eax = file_read(fd_entry->f, buffer, size);
+      lock_release(&file_lock);
       break;
     }
-    case SYS_WRITE:
+    case SYS_WRITE: { // int write (int fd, const void *buffer, unsigned size)
+      int fd;
+      const void *buffer;
+      unsigned size;
+      copy_data(&fd, sp+4, sizeof(int));
+      copy_data(&buffer, sp+8, sizeof(const void *));
+      copy_data(&size, sp+12, sizeof(unsigned));
+      if (buffer == NULL && size > 0) {
+        f->eax = -1;
+        system_exit(-1);
+        break;
+      }
+
+      if(fd == 1) { // write to console
+        // TODO not sure if i need to break up larger buffers
+        putbuf(buffer, size);
+        f->eax = size;
+        break;
+      } else if (fd == 0) { // trying to write to keyboard
+        f->eax = -1;
+        break;
+      } else if (fd > 1) {
+        struct fd_entry *fd_entry = find_fd(fd);
+        if (fd_entry == NULL) {
+          f->eax = -1;
+          break;
+        }
+        lock_acquire(&file_lock);
+        int written = 0;
+        while (written < size) {
+          int needWrite = size - written;
+          int remainder = file_write(fd_entry->f, (const uint8_t *)buffer + written, needWrite);
+          written += remainder;
+        }
+        lock_release(&file_lock);
+        f->eax = written;
+        break;
+      }
       // write to a file
       // (not implemented)
       break;
-    case SYS_SEEK:
+    }
+    case SYS_SEEK: { // void seek (int fd, unsigned position)
+      int fd;
+      unsigned position;
+      copy_data(&fd, sp+4, sizeof(int));
+      copy_data(&position, sp+8, sizeof(unsigned));
+      struct fd_entry *fd_entry = find_fd(fd);
+      if (fd_entry == NULL) {
+        // TODO call system_exit(-1) everywhere an error happens
+        system_exit(-1);
+        break;
+      }
+
+      // TODO seek
+      break;
+    }
       // change position in a file
       // (not implemented)
       break;

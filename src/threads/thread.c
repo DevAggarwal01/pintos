@@ -504,6 +504,9 @@ static void init_thread (struct thread *t, const char *name, int priority) {
     t->waiting = NULL; // new, added to thread structure
     t->magic = THREAD_MAGIC;
     list_init(&t->locks); // new, added to thread structure
+    list_init(&t->fds); // initialize the file descriptor list
+    t->next_fd = 2; // 0 and 1 are reserved for stdin and stdout
+    t->exec_file = NULL;
     // disable interrupts
     enum intr_level old = intr_disable ();
     // add the thread to the all threads list
