@@ -22,7 +22,7 @@ void syscall_init (void)
   lock_init(&file_lock);
 }
 
-static void system_exit (int status)
+void system_exit (int status)
 {
   struct thread *t = thread_current();
   t->exit_code = status;
@@ -36,59 +36,55 @@ static void system_exit (int status)
   thread_exit();
 }
 
-static void *addr_to_page (const void *addr) {
-  if (addr == NULL || !is_user_vaddr(addr)) {
+static uint8_t *addr_to_page(const void *useraddr) {
+  if (useraddr == NULL || !is_user_vaddr(useraddr)) {
     return NULL;
   }
-  void *page = pg_round_down((void *)addr);
-
-  return pagedir_get_page (thread_current()->pagedir, page);
+  return pagedir_get_page(thread_current()->pagedir, useraddr);
 }
 
-static bool copy_data (void *dst, const void *src, size_t size) {
-  uint8_t *dest = dst;
-  const uint8_t *source = src;
+static bool copy_data(void *kernel_dst, const void *user_src_, size_t size) {
+  const uint8_t *user_src = user_src_;
+  uint8_t *kernel_ptr = kernel_dst;
 
-  while (size > 0) {
-    void *page = addr_to_page(source);
-    if (page == NULL) return false;
-
-    size_t offset  = (size_t)((uintptr_t)source & (PGSIZE - 1));
-    size_t remainder     = PGSIZE - offset;
-    if (remainder > size) remainder = size; // to prevent problems when data is between 2 pages
-    uint8_t *kptr = (uint8_t *)page + offset;
-    memcpy(dest, kptr, remainder);
-
-    dest  += remainder;
-    source  += remainder;
-    size -= remainder;
+  for (size_t i = 0; i < size; i++) {
+    uint8_t *page = addr_to_page(user_src + i);
+    if (page == NULL) {
+      return false;
+    }
+    kernel_ptr[i] = *(user_src + i);
   }
   return true;
 }
 
-static char *copy_string (char *str) {
-  char *s = palloc_get_page(0);
-  if (s == NULL) return NULL;
-  size_t i = 0;
-  while (true) {
-    void *page = addr_to_page((uint8_t *) str + i);
+
+static char *copy_string(const char *user_str) {
+  if (user_str == NULL || !is_user_vaddr(user_str)) {
+    return NULL;
+  }
+
+  char *buffer = palloc_get_page(0);
+  if (buffer == NULL) {
+    return NULL;
+  }
+
+  for (size_t i = 0; i < PGSIZE; i++) {
+    uint8_t *page = addr_to_page(user_str + i);
     if (page == NULL) {
-      palloc_free_page(s);
+      palloc_free_page(buffer);
       return NULL;
     }
-    size_t offset = ((uintptr_t)str + i) & (PGSIZE - 1);
-    size_t remainder = PGSIZE - offset;
-    char *src = (char *)page + offset;
-
-    for (size_t bytes = 0; bytes < remainder; bytes++) {
-      s[i++] = src[bytes];
-      if (src[bytes] == '\0') {
-        return s; // end of string
-      }
-
+    buffer[i] = *(user_str + i);
+    if (buffer[i] == '\0') {
+      return buffer;
     }
   }
+
+  // Unterminated string or too long
+  palloc_free_page(buffer);
+  return NULL;
 }
+
 
 /* creates file descriptors and adds to fds list */
 static struct fd_entry *create_fd(struct file *file) {
@@ -135,63 +131,75 @@ static void syscall_handler (struct intr_frame *f UNUSED)
   // get the syscall number from the stack
   uint8_t *sp = f->esp;
 
-  if(sp == NULL || !is_user_vaddr((const void *)sp)) {
-    // invalid pointer
-    thread_exit();
+  if (sp == NULL || !is_user_vaddr((const void *)sp)) {
+    // invalid stack pointer
+    system_exit(-1);
   }
 
   int syscall_num;
-  copy_data(&syscall_num, sp, sizeof(int));
+  if (!copy_data(&syscall_num, sp, sizeof(int))) {
+    system_exit(-1);
+  }
 
-  // int a0=0,a1=0,a2=0;
-  // copy_data(&a0, sp+4, 4);
-  // copy_data(&a1, sp+8, 4);
-  // copy_data(&a2, sp+12, 4);
-
-  // printf("sysno=%d a0=%d a1=0x%x a2=%d\n", syscall_num, a0, (unsigned)a1, a2);
-
-  switch(syscall_num) {
+  switch (syscall_num) {
     case SYS_HALT: { // void halt (void)
       shutdown_power_off();
       break;
     }
-      
+
     case SYS_EXIT: { // void exit (int status)
       int status;
-      copy_data(&status, sp+4, sizeof(int));
+      if (!copy_data(&status, sp + 4, sizeof(int))) {
+        system_exit(-1);
+      }
       system_exit(status);
       break;
     }
+
     case SYS_EXEC: { // pid_t exec (const char *cmd_line)
-        char *cmd_linePtr;
-        copy_data(&cmd_linePtr, sp+4, sizeof(const char *));
-        if(cmd_linePtr == NULL) {
-          system_exit(-1);
-        }
-        char *cmd_line = copy_string(cmd_linePtr); // because its in user memory but not kernel memory
-        if (cmd_line == NULL) {
-          system_exit(-1);
-        }
-        f->eax = process_execute(cmd_line);
-        palloc_free_page(cmd_line);
-        break;
-      }
-    case SYS_WAIT: { // int wait (pid_t pid)
-      tid_t tid;
-      copy_data(&tid, sp+4, sizeof(tid_t));
-      f->eax = process_wait(tid);
-      break;
-      }
-    case SYS_CREATE: { // bool create (const char *file, unsigned initial_size)
-      char *filePtr;
-      unsigned initial_size;
-      copy_data(&filePtr, sp+4, sizeof(const char *));
-      if(filePtr == NULL) {
+      const char *cmd_linePtr;
+      if (!copy_data(&cmd_linePtr, sp + 4, sizeof(const char *))) {
         system_exit(-1);
       }
-      copy_data(&initial_size, sp+8, sizeof(unsigned));
-      char *file = copy_string(filePtr);
-      if(file == NULL || file[0] == '\0') {
+      if (cmd_linePtr == NULL) {
+        system_exit(-1);
+      }
+      char *cmd_line = copy_string((char *)cmd_linePtr);
+      if (cmd_line == NULL) {
+        system_exit(-1);
+      }
+      f->eax = process_execute(cmd_line);
+      palloc_free_page(cmd_line);
+      break;
+    }
+
+    case SYS_WAIT: { // int wait (pid_t pid)
+      tid_t tid;
+      if (!copy_data(&tid, sp + 4, sizeof(tid_t))) {
+        f->eax = -1;
+        break;
+      }
+      f->eax = process_wait(tid);
+      break;
+    }
+
+    case SYS_CREATE: { // bool create (const char *file, unsigned initial_size)
+      const char *filePtr;
+      unsigned initial_size;
+      if (!copy_data(&filePtr, sp + 4, sizeof(const char *))) {
+        system_exit(-1);
+      }
+      if (filePtr == NULL) {
+        system_exit(-1);
+      }
+      if (!copy_data(&initial_size, sp + 8, sizeof(unsigned))) {
+        system_exit(-1);
+      }
+      char *file = copy_string((char *)filePtr);
+      if (file == NULL) {
+        system_exit(-1);
+      }
+      if (file[0] == '\0') {
         palloc_free_page(file);
         f->eax = false;
         return;
@@ -202,14 +210,20 @@ static void syscall_handler (struct intr_frame *f UNUSED)
       palloc_free_page(file);
       break;
     }
+
     case SYS_REMOVE: { // bool remove (const char *file)
-      char *filePtr;
-      copy_data(&filePtr, sp+4, sizeof(const char *));
-      if(filePtr == NULL) {
+      const char *filePtr;
+      if (!copy_data(&filePtr, sp + 4, sizeof(const char *))) {
         system_exit(-1);
       }
-      char *file = copy_string(filePtr);
-      if(file == NULL || file[0] == '\0') {
+      if (filePtr == NULL) {
+        system_exit(-1);
+      }
+      char *file = copy_string((char *)filePtr);
+      if (file == NULL) {
+        system_exit(-1);
+      }
+      if (file[0] == '\0') {
         palloc_free_page(file);
         f->eax = false;
         return;
@@ -219,21 +233,25 @@ static void syscall_handler (struct intr_frame *f UNUSED)
       lock_release(&file_lock);
       palloc_free_page(file);
       break;
-
     }
+
     case SYS_OPEN: { // int open (const char *file)
       const char *fileNamePtr;
-      copy_data(&fileNamePtr, sp+4, sizeof(const char *));
-      if(fileNamePtr == NULL) {
+      if (!copy_data(&fileNamePtr, sp + 4, sizeof(const char *))) {
+        system_exit(-1);
+      }
+      if (fileNamePtr == NULL) {
         system_exit(-1);
       }
       char *fileName = copy_string((char *)fileNamePtr);
-      if(fileName == NULL || fileName[0] == '\0') {
+      if (fileName == NULL) {
+        system_exit(-1);
+      }
+      if (fileName[0] == '\0') {
         palloc_free_page(fileName);
         f->eax = -1;
         return;
       }
-      // open the file
       lock_acquire(&file_lock);
       struct file *file = filesys_open(fileName);
       lock_release(&file_lock);
@@ -243,10 +261,9 @@ static void syscall_handler (struct intr_frame *f UNUSED)
         break;
       }
       struct fd_entry *fd = create_fd(file);
-      
       if (fd == NULL) {
         f->eax = -1;
-        file_close(file); // close the file if we couldn't create fd_entry
+        file_close(file);
         palloc_free_page(fileName);
         break;
       }
@@ -254,11 +271,12 @@ static void syscall_handler (struct intr_frame *f UNUSED)
       palloc_free_page(fileName);
       break;
     }
+
     case SYS_FILESIZE: { // int filesize (int fd)
       int fd;
-      copy_data(&fd, sp+4, sizeof(int));
-      struct thread *t = thread_current();
-      struct list_elem *e;
+      if (!copy_data(&fd, sp + 4, sizeof(int))) {
+        system_exit(-1);
+      }
       struct fd_entry *fd_entry = find_fd(fd);
       if (fd_entry == NULL) {
         f->eax = -1;
@@ -269,29 +287,38 @@ static void syscall_handler (struct intr_frame *f UNUSED)
       lock_release(&file_lock);
       break;
     }
+
     case SYS_READ: { // int read (int fd, void *buffer, unsigned size)
-      // read from a file
       int fd;
       void *buffer;
       unsigned size;
-      if (!copy_data(&fd, sp+4, sizeof(int)) || !copy_data(&buffer, sp+8, sizeof(void *)) || !copy_data(&size, sp+12, sizeof(unsigned))) {
-        f->eax = -1;
+      if (!copy_data(&fd, sp + 4, sizeof(int)) ||
+          !copy_data(&buffer, sp + 8, sizeof(void *)) ||
+          !copy_data(&size, sp + 12, sizeof(unsigned))) {
         system_exit(-1);
+      }
+      if (size == 0) {
+        f->eax = 0;
         break;
       }
-      // copy_data(&fd, sp+4, sizeof(int))
-      // copy_data(&buffer, sp+8, sizeof(void *));
-      // copy_data(&size, sp+12, sizeof(unsigned));
-      if (size == 0) { 
-        f->eax = 0; 
-        break; 
-      }
-      if (buffer == NULL || addr_to_page(buffer) == NULL) {
-        f->eax = -1;
+      if (buffer == NULL) {
         system_exit(-1);
-        break;
       }
-      if(fd == 0) { // read from keyboard
+      // validate each page of buffer
+      char *buf = (char *)buffer;
+      unsigned remaining = size;
+      while (remaining > 0) {
+        if (addr_to_page(buf) == NULL) {
+          system_exit(-1);
+        }
+        size_t offset = (uintptr_t)buf & (PGSIZE - 1);
+        size_t chunk = PGSIZE - offset;
+        if (chunk > remaining)
+          chunk = remaining;
+        buf += chunk;
+        remaining -= chunk;
+      }
+      if (fd == 0) { // read from keyboard
         for (unsigned i = 0; i < size; i++) {
           ((char *)buffer)[i] = input_getc();
         }
@@ -308,33 +335,45 @@ static void syscall_handler (struct intr_frame *f UNUSED)
       lock_release(&file_lock);
       break;
     }
+
     case SYS_WRITE: { // int write (int fd, const void *buffer, unsigned size)
       int fd;
       const void *buffer;
       unsigned size;
-      if (!copy_data(&fd, sp+4, sizeof(int)) || !copy_data(&buffer, sp+8, sizeof(const void *)) || !copy_data(&size, sp+12, sizeof(unsigned))) {
-        f->eax = -1;
+      if (!copy_data(&fd, sp + 4, sizeof(int)) ||
+          !copy_data(&buffer, sp + 8, sizeof(const void *)) ||
+          !copy_data(&size, sp + 12, sizeof(unsigned))) {
         system_exit(-1);
+      }
+      if (size == 0) {
+        f->eax = 0;
         break;
       }
-      // copy_data(&fd, sp+4, sizeof(int));
-      // copy_data(&buffer, sp+8, sizeof(const void *));
-      // copy_data(&size, sp+12, sizeof(unsigned));
-      if (buffer == NULL || addr_to_page(buffer) == NULL) {
-        f->eax = -1;
+      if (buffer == NULL) {
         system_exit(-1);
-        break;
       }
-
-      if(fd == 1) { // write to console
-        // TODO not sure if i need to break up larger buffers
+      // validate each page of buffer
+      const char *bufw = (const char *)buffer;
+      unsigned remainingw = size;
+      while (remainingw > 0) {
+        if (addr_to_page(bufw) == NULL) {
+          system_exit(-1);
+        }
+        size_t offset = (uintptr_t)bufw & (PGSIZE - 1);
+        size_t chunk = PGSIZE - offset;
+        if (chunk > remainingw)
+          chunk = remainingw;
+        bufw += chunk;
+        remainingw -= chunk;
+      }
+      if (fd == 1) { // write to console
         putbuf(buffer, size);
         f->eax = size;
         break;
-      } else if (fd == 0) { // trying to write to keyboard
+      } else if (fd == 0) { // write to keyboard not allowed
         f->eax = -1;
         break;
-      } else if (fd > 1) {
+      } else {
         struct fd_entry *fd_entry = find_fd(fd);
         if (fd_entry == NULL) {
           f->eax = -1;
@@ -342,41 +381,44 @@ static void syscall_handler (struct intr_frame *f UNUSED)
         }
         lock_acquire(&file_lock);
         int written = 0;
-        while (written < size) {
+        while (written < (int)size) {
           int needWrite = size - written;
-          int remainder = file_write(fd_entry->f, (const uint8_t *)buffer + written, needWrite);
-          if(remainder <= 0) {
+          int wrote = file_write(fd_entry->f, (const uint8_t *)buffer + written, needWrite);
+          if (wrote <= 0) {
             break;
           }
-          written += remainder; 
+          written += wrote;
         }
         lock_release(&file_lock);
         f->eax = written;
         break;
       }
-      // write to a file
-      // (not implemented)
-      break;
     }
+
     case SYS_SEEK: { // void seek (int fd, unsigned position)
       int fd;
       unsigned position;
-      copy_data(&fd, sp+4, sizeof(int));
-      copy_data(&position, sp+8, sizeof(unsigned));
+      if (!copy_data(&fd, sp + 4, sizeof(int))) {
+        system_exit(-1);
+      }
+      if (!copy_data(&position, sp + 8, sizeof(unsigned))) {
+        system_exit(-1);
+      }
       struct fd_entry *fd_entry = find_fd(fd);
       if (fd_entry == NULL) {
-        // TODO call system_exit(-1) everywhere an error happens
         system_exit(-1);
-        break;
       }
       lock_acquire(&file_lock);
       file_seek(fd_entry->f, position);
       lock_release(&file_lock);
       break;
     }
+
     case SYS_TELL: { // unsigned tell (int fd)
       int fd;
-      copy_data(&fd, sp+4, sizeof(int));
+      if (!copy_data(&fd, sp + 4, sizeof(int))) {
+        system_exit(-1);
+      }
       struct fd_entry *fd_entry = find_fd(fd);
       if (fd_entry == NULL) {
         f->eax = -1;
@@ -387,9 +429,12 @@ static void syscall_handler (struct intr_frame *f UNUSED)
       lock_release(&file_lock);
       break;
     }
+
     case SYS_CLOSE: { // void close (int fd)
       int fd;
-      copy_data(&fd, sp+4, sizeof(int));
+      if (!copy_data(&fd, sp + 4, sizeof(int))) {
+        system_exit(-1);
+      }
       struct fd_entry *fd_entry = find_fd(fd);
       if (fd_entry == NULL) {
         f->eax = -1;
@@ -401,14 +446,9 @@ static void syscall_handler (struct intr_frame *f UNUSED)
       remove_fd(fd);
       break;
     }
-    
+
     default:
       // unknown syscall number
-      thread_exit();
-    
-
+      system_exit(-1);
   }
-
 }
-
-

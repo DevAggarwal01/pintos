@@ -37,64 +37,120 @@ struct start_info {
    FILENAME.  The new thread may be scheduled (and may even exit)
    before process_execute() returns.  Returns the new process's
    thread id, or TID_ERROR if the thread cannot be created. */
-tid_t process_execute (const char *file_name) {
-    // a copy of file name and the thread ID
+tid_t
+process_execute (const char *file_name) {
     char *fn_copy;
     tid_t tid;
-    // make a page-sized copy of file_name (full command line)
+
+    /* Make a kernel copy of FILE_NAME for the child to use. */
     fn_copy = palloc_get_page (0);
-    if (fn_copy == NULL) {
+    if (fn_copy == NULL)
         return TID_ERROR;
-    }
     strlcpy (fn_copy, file_name, PGSIZE);
-    // create a child record and initialize it
+
+    /* Allocate child record. */
     struct child_record *rec = palloc_get_page(0);
     if (rec == NULL) {
-        palloc_free_page (fn_copy);
-        return TID_ERROR;
+      palloc_free_page(fn_copy);
+      return TID_ERROR;
     }
+
+    /* Allocate start_info page. */
     struct start_info *info = palloc_get_page(0);
     if (info == NULL) {
-        palloc_free_page (fn_copy);
-        palloc_free_page (rec);
-        return TID_ERROR;
+      palloc_free_page(fn_copy);
+      palloc_free_page(rec);
+      return TID_ERROR;
     }
-    // initialize the record
-    rec->parent_tid = thread_tid();    // current thread is parent
-    rec->child_tid = -1;                // placeholder until thread_create returns
-    rec->exit_code = -1;                // unknown right now
-    rec->exited = false;                // obviously, child hasn't exited yet
-    rec->waited = false;                // obviously, parent hasn't waited yet
-    sema_init (&rec->start_sema, 0);    // child will wait until parent setup complete
-    sema_init (&rec->exit_sema, 0);     // parent will wait until child exits
-    // add the record to the list of child records
-    // TO DO: UGH. BAD BAD BAD. PAINS ME TO SEE. INSERT TO SET UP LIST IN SORTED ORDER.
-    list_push_back (&child_list, &rec->elem);
+
+    /* Initialize child record. */
+    rec->parent_tid = thread_tid();
+    rec->child_tid = -1;
+    rec->exit_code = -1;
+    rec->exited = false;
+    rec->waited = false;
+    sema_init(&rec->start_sema, 0);
+    sema_init(&rec->exit_sema, 0);
+
+    /* Register the record in global list and parent's child list. */
+    list_push_back(&child_list, &rec->elem);
     struct thread *parent = thread_current();
-    list_push_back (&parent->children, &rec->elem_child);
-    info->fn_copy = fn_copy;
+    list_push_back(&parent->children, &rec->elem_child);
+
+    /* Fill start_info for the child thread. */
+    info->fn_copy = fn_copy;   /* full command line kept intact for child */
     info->rec = rec;
     info->parent = parent;
-    
-    // extract the first word from file_name
-    char *save_ptr;
-    char *program = strtok_r((char *) file_name, " ", &save_ptr);
-    // create a new thread to execute file_name
-    tid = thread_create (program, PRI_DEFAULT, start_process, info);
-    if (tid == TID_ERROR) {
-        // thread creation failed, so remove record & free pages
-        list_remove (&rec->elem);
-        palloc_free_page (rec);
-        palloc_free_page (fn_copy);
-        return TID_ERROR;
+
+    /* Use a temporary kernel page to extract program name without clobbering fn_copy. */
+    char *prog_copy = palloc_get_page(0);
+    if (prog_copy == NULL) {
+      /* Clean up on error. */
+      list_remove(&rec->elem);
+      list_remove(&rec->elem_child);
+      palloc_free_page(info);
+      palloc_free_page(rec);
+      palloc_free_page(fn_copy);
+      return TID_ERROR;
     }
-    // fill child's TID
+    strlcpy(prog_copy, fn_copy, PGSIZE);
+
+    /* Tokenize the temporary buffer to get the program name. */
+    char *save_ptr;
+    char *program = strtok_r(prog_copy, " ", &save_ptr);
+    if (program == NULL) {
+      /* Clean up on error. */
+      list_remove(&rec->elem);
+      list_remove(&rec->elem_child);
+      palloc_free_page(info);
+      palloc_free_page(rec);
+      palloc_free_page(fn_copy);
+      palloc_free_page(prog_copy);
+      return TID_ERROR;
+    }
+
+    /* Check that the program file exists before creating thread. */
+    lock_acquire(&file_lock);
+    struct file *file = filesys_open(program);
+    lock_release(&file_lock);
+    if (file == NULL) {
+      /* Not found: clean up and return error. */
+      list_remove(&rec->elem);
+      list_remove(&rec->elem_child);
+      palloc_free_page(info);
+      palloc_free_page(rec);
+      palloc_free_page(fn_copy);
+      palloc_free_page(prog_copy);
+      return TID_ERROR;
+    }
+    file_close(file);
+
+    /* Create the child thread. Note: thread_create copies 'program' (name) for the thread name. */
+    tid = thread_create(program, PRI_DEFAULT, start_process, info);
+    if (tid == TID_ERROR) {
+      list_remove(&rec->elem);
+      list_remove(&rec->elem_child);
+      palloc_free_page(info);
+      palloc_free_page(rec);
+      palloc_free_page(fn_copy);
+      palloc_free_page(prog_copy);
+      return TID_ERROR;
+    }
+
+    /* Store child's tid in the record (before letting child proceed). */
     rec->child_tid = tid;
-    // let the child proceed
-    sema_up (&rec->start_sema);
-    // parent returns child's TID
+
+    /* Done with temporary program copy. Child owns fn_copy and will free it. */
+    palloc_free_page(prog_copy);
+
+    /* Allow the child to run (start_process does sema_down on this). */
+    sema_up(&rec->start_sema);
+
+    /* Parent returns the child's tid. */
     return tid;
 }
+
+
 
 
 /* A thread function that loads a user process and starts it
@@ -106,6 +162,7 @@ static void start_process (void *info){
 
     t->parent = start_info->parent;
     t->child_record = start_info->rec;
+    palloc_free_page(start_info);
     // the file name (full command line) is passed in via file_name_
     struct intr_frame if_;
     bool success;
@@ -133,7 +190,8 @@ static void start_process (void *info){
     palloc_free_page (file_name);
     // if load failed, quit
     if (!success) {
-        thread_exit ();
+        system_exit(-1);
+        NOT_REACHED();
     }
     /* Start the user process by simulating a return from an
         interrupt, implemented by intr_exit (in
@@ -355,18 +413,27 @@ bool load (const char *file_name, void (**eip) (void), void **esp) {
     // -----START MODIFICATION-----
     // make a copy of file name to tokenize
     char *file_copy = palloc_get_page(0);
+    if (file_copy == NULL) {
+        // Could not allocate memory: fail gracefully.
+        return false;
+    }
     strlcpy(file_copy, file_name, PGSIZE);
     // extract the first word from filename
     char *save_ptr;
     char *program = strtok_r(file_copy, " ", &save_ptr);
     // open the file using the first word (which is the program name)
+    lock_acquire(&file_lock);
     file = filesys_open(program);
+    if (file != NULL) {
+        /* Keep the file and prevent other writers while we execute it. */
+        t->exec_file = file;
+        file_deny_write(file);
+    }
+    lock_release(&file_lock);
+
     if (file == NULL) {
         printf ("load: %s: open failed\n", file_name);
         goto done;
-    } else {
-      t->exec_file = file;
-      file_deny_write(file);
     }
     
     // -----END MODIFICATION-----
