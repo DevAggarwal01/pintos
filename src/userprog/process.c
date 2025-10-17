@@ -18,6 +18,7 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "threads/synch.h" // for semaphores and synchronization 
+#include "syscall.h"
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
@@ -213,7 +214,23 @@ void process_exit (void) {
         sema_up(&cur->child_record->exit_sema);
     }
 
+    if (cur->exec_file != NULL) {
+      lock_acquire(&file_lock);
+      file_allow_write(cur->exec_file);
+      file_close(cur->exec_file);
+      lock_release(&file_lock);
+      cur->exec_file = NULL;
+    }
+
     // TODO close all open files, free file descriptors
+    while(!list_empty(&cur->fds)) {
+        struct list_elem *e = list_begin(&cur->fds);
+        struct fd_entry *fd_entry = list_entry(e, struct fd_entry, elem);
+        lock_acquire(&file_lock);
+        file_close(fd_entry->f);
+        lock_release(&file_lock);
+        remove_fd(fd_entry->fd);
+    }
 
     /* Destroy the current process's page directory and switch back
         to the kernel-only page directory. */
@@ -344,13 +361,18 @@ bool load (const char *file_name, void (**eip) (void), void **esp) {
     char *program = strtok_r(file_copy, " ", &save_ptr);
     // open the file using the first word (which is the program name)
     file = filesys_open(program);
-    // -----END MODIFICATION-----
-
-
     if (file == NULL) {
         printf ("load: %s: open failed\n", file_name);
         goto done;
+    } else {
+      t->exec_file = file;
+      file_deny_write(file);
     }
+    
+    // -----END MODIFICATION-----
+
+
+    
     /* Read and verify executable header. */
     if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr ||
         memcmp (ehdr.e_ident, "\177ELF\1\1\1", 7) || ehdr.e_type != 2 ||
@@ -426,8 +448,18 @@ bool load (const char *file_name, void (**eip) (void), void **esp) {
     success = true;
     done:
         /* We arrive here whether the load is successful or not. */
-        file_close (file);
+        // file_close (file);
+        // return success;
+
+        // [THIS IS A MODIFICATION MADE IN THIS METHOD FROM THE ORIGINAL CODE]
+        // -----START MODIFICATION-----
+        if (!success && file != NULL) {
+          file_close(file);
+          t->exec_file = NULL;
+        }
+        if (file_copy) palloc_free_page(file_copy);
         return success;
+        // -----END MODIFICATION-----
 }
 
 /* load() helpers. */
