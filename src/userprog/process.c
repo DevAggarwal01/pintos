@@ -69,8 +69,10 @@ process_execute (const char *file_name) {
     rec->exit_code = -1;
     rec->exited = false;
     rec->waited = false;
+    rec->loaded = false;
     sema_init(&rec->start_sema, 0);
     sema_init(&rec->exit_sema, 0);
+    sema_init(&rec->load_sema, 0);
 
     /* Register the record in global list and parent's child list. */
     list_push_back(&child_list, &rec->elem);
@@ -117,7 +119,6 @@ process_execute (const char *file_name) {
       /* Not found: clean up and return error. */
       list_remove(&rec->elem);
       list_remove(&rec->elem_child);
-      palloc_free_page(info);
       palloc_free_page(rec);
       palloc_free_page(fn_copy);
       palloc_free_page(prog_copy);
@@ -145,6 +146,18 @@ process_execute (const char *file_name) {
 
     /* Allow the child to run (start_process does sema_down on this). */
     sema_up(&rec->start_sema);
+
+    /* WAIT for child to finish loading so that exec() can return -1 on failure. */
+    sema_down(&rec->load_sema);
+
+    /* If the child failed to load, clean up and return error (-1). */
+    if (!rec->loaded) {
+        /* child failed to load; remove record and free pages */
+        list_remove(&rec->elem);
+        list_remove(&rec->elem_child);
+        palloc_free_page(rec);
+        return TID_ERROR;
+    }
 
     /* Parent returns the child's tid. */
     return tid;
@@ -187,6 +200,13 @@ static void start_process (void *info){
     if_.cs = SEL_UCSEG;
     if_.eflags = FLAG_IF | FLAG_MBS;
     success = load(file_name, &if_.eip, &if_.esp);
+
+    /* Tell parent whether load() succeeded so exec() can return -1 on failure. */
+    if (rec != NULL) {
+        rec->loaded = success;
+        sema_up(&rec->load_sema);
+    }
+
     palloc_free_page (file_name);
     // if load failed, quit
     if (!success) {

@@ -20,10 +20,11 @@ struct child_record {
     int exit_code;                  // exit status
     bool exited;                    // if the child has exited
     bool waited;                    // if the parent has already waited
+    bool loaded;                    // if the child successfully loaded its executable
     struct semaphore start_sema;    // child waits until parent finishes setup
+    struct semaphore load_sema;     // parent waits until child finishes loading
     struct semaphore exit_sema;     // parent waits until child exits
     struct list_elem elem;          // element for global list
-
     struct list_elem elem_child;         // in parent->children list
 };
 
