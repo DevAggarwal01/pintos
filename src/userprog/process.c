@@ -39,31 +39,27 @@ struct start_info {
    thread id, or TID_ERROR if the thread cannot be created. */
 tid_t
 process_execute (const char *file_name) {
-    char *fn_copy;
-    tid_t tid;
-
-    /* Make a kernel copy of FILE_NAME for the child to use. */
-    fn_copy = palloc_get_page (0);
-    if (fn_copy == NULL)
+     tid_t tid;
+    // make a kernel copy of FILE_NAME for the child to use
+    char *fn_copy = palloc_get_page (0);
+    if (fn_copy == NULL) {
         return TID_ERROR;
+    }
     strlcpy (fn_copy, file_name, PGSIZE);
-
-    /* Allocate child record. */
+    // allocate child record
     struct child_record *rec = palloc_get_page(0);
     if (rec == NULL) {
-      palloc_free_page(fn_copy);
-      return TID_ERROR;
+        palloc_free_page(fn_copy);
+        return TID_ERROR;
     }
-
-    /* Allocate start_info page. */
+    // allocate page for start_info
     struct start_info *info = palloc_get_page(0);
     if (info == NULL) {
-      palloc_free_page(fn_copy);
-      palloc_free_page(rec);
-      return TID_ERROR;
+        palloc_free_page(fn_copy);
+        palloc_free_page(rec);
+        return TID_ERROR;
     }
-
-    /* Initialize child record. */
+    // initialize child record
     rec->parent_tid = thread_tid();
     rec->child_tid = -1;
     rec->exit_code = -1;
@@ -73,106 +69,102 @@ process_execute (const char *file_name) {
     sema_init(&rec->start_sema, 0);
     sema_init(&rec->exit_sema, 0);
     sema_init(&rec->load_sema, 0);
-
-    /* Register the record in global list and parent's child list. */
+    // register the record in global list and parent's child list
+    enum intr_level old_level = intr_disable();
     list_push_back(&child_list, &rec->elem);
     struct thread *parent = thread_current();
     list_push_back(&parent->children, &rec->elem_child);
-
-    /* Fill start_info for the child thread. */
-    info->fn_copy = fn_copy;   /* full command line kept intact for child */
+    intr_set_level(old_level);
+    // fill start_info for the child thread
+    info->fn_copy = fn_copy;
     info->rec = rec;
     info->parent = parent;
-
-    /* Use a temporary kernel page to extract program name without clobbering fn_copy. */
+    // use a temporary kernel page to extract program name without affecting fn_copy
     char *prog_copy = palloc_get_page(0);
     if (prog_copy == NULL) {
-      /* Clean up on error. */
-      list_remove(&rec->elem);
-      list_remove(&rec->elem_child);
-      palloc_free_page(info);
-      palloc_free_page(rec);
-      palloc_free_page(fn_copy);
-      return TID_ERROR;
+        enum intr_level old_level = intr_disable();
+        list_remove(&rec->elem);
+        list_remove(&rec->elem_child);
+        intr_set_level(old_level);
+        palloc_free_page(info);
+        palloc_free_page(rec);
+        palloc_free_page(fn_copy);
+        return TID_ERROR;
     }
     strlcpy(prog_copy, fn_copy, PGSIZE);
-
-    /* Tokenize the temporary buffer to get the program name. */
+    // tokenize the temporary buffer to get the program name
     char *save_ptr;
     char *program = strtok_r(prog_copy, " ", &save_ptr);
     if (program == NULL) {
-      /* Clean up on error. */
-      list_remove(&rec->elem);
-      list_remove(&rec->elem_child);
-      palloc_free_page(info);
-      palloc_free_page(rec);
-      palloc_free_page(fn_copy);
-      palloc_free_page(prog_copy);
-      return TID_ERROR;
+        enum intr_level old_level = intr_disable();
+        list_remove(&rec->elem);
+        list_remove(&rec->elem_child);
+        intr_set_level(old_level);
+        palloc_free_page(info);
+        palloc_free_page(rec);
+        palloc_free_page(fn_copy);
+        palloc_free_page(prog_copy);
+        return TID_ERROR;
     }
-
-    /* Check that the program file exists before creating thread. */
+    // check that the program file exists before creating thread
     lock_acquire(&file_lock);
     struct file *file = filesys_open(program);
     lock_release(&file_lock);
     if (file == NULL) {
-      /* Not found: clean up and return error. */
-      list_remove(&rec->elem);
-      list_remove(&rec->elem_child);
-      palloc_free_page(rec);
-      palloc_free_page(fn_copy);
-      palloc_free_page(prog_copy);
-      return TID_ERROR;
-    }
-    file_close(file);
-
-    /* Create the child thread. Note: thread_create copies 'program' (name) for the thread name. */
-    tid = thread_create(program, PRI_DEFAULT, start_process, info);
-    if (tid == TID_ERROR) {
-      list_remove(&rec->elem);
-      list_remove(&rec->elem_child);
-      palloc_free_page(info);
-      palloc_free_page(rec);
-      palloc_free_page(fn_copy);
-      palloc_free_page(prog_copy);
-      return TID_ERROR;
-    }
-
-    /* Store child's tid in the record (before letting child proceed). */
-    rec->child_tid = tid;
-
-    /* Done with temporary program copy. Child owns fn_copy and will free it. */
-    palloc_free_page(prog_copy);
-
-    /* Allow the child to run (start_process does sema_down on this). */
-    sema_up(&rec->start_sema);
-
-    /* WAIT for child to finish loading so that exec() can return -1 on failure. */
-    sema_down(&rec->load_sema);
-
-    /* If the child failed to load, clean up and return error (-1). */
-    if (!rec->loaded) {
-        /* child failed to load; remove record and free pages */
+        enum intr_level old_level = intr_disable();
         list_remove(&rec->elem);
         list_remove(&rec->elem_child);
+        intr_set_level(old_level);
+        palloc_free_page(rec);
+        palloc_free_page(fn_copy);
+        palloc_free_page(prog_copy);
+        return TID_ERROR;
+    }
+    file_close(file);
+    // create the child thread
+    tid = thread_create(program, PRI_DEFAULT, start_process, info);
+    if (tid == TID_ERROR) {
+        enum intr_level old_level = intr_disable();
+        list_remove(&rec->elem);
+        list_remove(&rec->elem_child);
+        intr_set_level(old_level);
+        palloc_free_page(info);
+        palloc_free_page(rec);
+        palloc_free_page(fn_copy);
+        palloc_free_page(prog_copy);
+        return TID_ERROR;
+    }
+    // store child's tid in the record (before letting child proceed)
+    rec->child_tid = tid;
+    // free temporary program copy
+    palloc_free_page(prog_copy);
+    // allow the child to run (start_process does sema_down on this)
+    sema_up(&rec->start_sema);
+    // wait for child to finish loading so that exec() can return -1 on failure
+    sema_down(&rec->load_sema);
+
+    // if the child failed to load, clean up and return error (-1)
+    if (!rec->loaded) {
+        enum intr_level old_level = intr_disable();
+        list_remove(&rec->elem);
+        list_remove(&rec->elem_child);
+        intr_set_level(old_level);
         palloc_free_page(rec);
         return TID_ERROR;
     }
-
-    /* Parent returns the child's tid. */
+    // parent returns the child's tid
     return tid;
 }
-
-
 
 
 /* A thread function that loads a user process and starts it
    running. */
 static void start_process (void *info){
+    // initialize thread, start_info, and file_name structures
     struct thread *t = thread_current();
     struct start_info *start_info = info;
     char *file_name = start_info->fn_copy;
-
+    // set up parent and child record pointers
     t->parent = start_info->parent;
     t->child_record = start_info->rec;
     palloc_free_page(start_info);
@@ -180,16 +172,7 @@ static void start_process (void *info){
     struct intr_frame if_;
     bool success;
     // find this thread's own child record in the list of records
-    // TO DO: UGH. BAD BAD BAD. PAINS ME TO SEE. REMOVE AFTER LIST SET UP IN SORTED ORDER.
     struct child_record *rec = t->child_record;
-    // tid_t my_tid = thread_tid();
-    // for (struct list_elem *e = list_begin(&child_list); e != list_end(&child_list); e = list_next(e)) {
-    //     struct child_record *c = list_entry(e, struct child_record, elem);
-    //     if (c->child_tid == my_tid) {
-    //         rec = c;
-    //         break;
-    //     }
-    // }
     // wait until parent signals that setup is complete
     if (rec != NULL) {
         sema_down(&rec->start_sema);
@@ -200,13 +183,13 @@ static void start_process (void *info){
     if_.cs = SEL_UCSEG;
     if_.eflags = FLAG_IF | FLAG_MBS;
     success = load(file_name, &if_.eip, &if_.esp);
-
-    /* Tell parent whether load() succeeded so exec() can return -1 on failure. */
+    // tell parent whether load() succeeded so exec() can return -1 on failure
     if (rec != NULL) {
+        enum intr_level old = intr_disable();
         rec->loaded = success;
         sema_up(&rec->load_sema);
+        intr_set_level(old);
     }
-
     palloc_free_page (file_name);
     // if load failed, quit
     if (!success) {
@@ -230,40 +213,39 @@ static void start_process (void *info){
    been successfully called for the given TID, returns -1
    immediately, without waiting. */
 int process_wait (tid_t child_tid) { 
-    // get this thread's TID
+    // get this current thread and TID
     struct thread *parent = thread_current();
     tid_t my_tid = thread_tid();
+    // find the child record for the given child TID
     struct child_record *rec = NULL;
-    // find the record for this parent-child pair
-    // TO DO: UGH. BAD BAD BAD. PAINS ME TO SEE. REMOVE AFTER LIST SET UP IN SORTED ORDER.
-    // for (struct list_elem *e = list_begin(&child_list); e != list_end(&child_list); e = list_next(e)) {
-    //     struct child_record *c = list_entry (e, struct child_record, elem);
-    //     if (c->parent_tid == my_tid && c->child_tid == child_tid) {
-    //         rec = c;
-    //         break;
-    //     }
-    // }
+    enum intr_level old = intr_disable();
     for (struct list_elem *e = list_begin(&parent->children); e != list_end(&parent->children); e = list_next(e)) {
         struct child_record *c = list_entry(e, struct child_record, elem_child);
         if (c->child_tid == child_tid) {
-            rec = c; break;
+            rec = c;
+            break;
         }
     }
-    
     // if no such child or already waited, return -1
     if (rec == NULL || rec->waited) {
+        intr_set_level(old);
         return -1;
     }
     // mark as waited (only one successful wait allowed)
     rec->waited = true;
+    intr_set_level(old);
     // wait until child exits
-    if(!rec->exited) sema_down(&rec->exit_sema);
+    if(!rec->exited) {
+        sema_down(&rec->exit_sema);
+    }
     // capture exit status and remove/free the record
     int status = rec->exit_code;
+    enum intr_level old_level = intr_disable();
     list_remove(&rec->elem);
     list_remove(&rec->elem_child);
+    intr_set_level(old_level);
     palloc_free_page(rec);
-    // return the child's exit status
+    // return the child's exit status 
     return status;
 }
 
@@ -274,42 +256,37 @@ void process_exit (void) {
     uint32_t *pd;
     // record exit status in the corresponding child record, so parent can get it
     tid_t my_tid = thread_tid();
-    // for (struct list_elem *e = list_begin(&child_list); e != list_end(&child_list); e = list_next(e)) {
-    //     struct child_record *c = list_entry (e, struct child_record, elem);
-    //     if (c->child_tid == my_tid) {
-    //         // fill exit info; for now, exit status is always 0
-    //         // TO DO: CHANGE EXITE LATER LATER? UNSURE ABOUT THIS ONE.
-    //         c->exit_code = 0;
-    //         c->exited = true;
-    //         // wake up the waiting parent, if any
-    //         sema_up (&c->exit_sema);
-    //         break;
-    //     }
-    // }
+    // if child record exists, update it and wake up parent
     if (cur->child_record && !cur->child_record->exited) {
+        enum intr_level old = intr_disable();
         cur->child_record->exit_code = cur->exit_code;
         cur->child_record->exited = true;
         sema_up(&cur->child_record->exit_sema);
+        intr_set_level(old);
     }
-
+    // close executable file, allow writes
     if (cur->exec_file != NULL) {
-      lock_acquire(&file_lock);
-      file_allow_write(cur->exec_file);
-      file_close(cur->exec_file);
-      lock_release(&file_lock);
-      cur->exec_file = NULL;
+        lock_acquire(&file_lock);
+        file_allow_write(cur->exec_file);
+        file_close(cur->exec_file);
+        lock_release(&file_lock);
+        cur->exec_file = NULL;
     }
-
-    // TODO close all open files, free file descriptors
+    // close all open files and free file descriptors
     while(!list_empty(&cur->fds)) {
+        enum intr_level old = intr_disable();
+        if (list_empty(&cur->fds)) {
+            intr_set_level(old);
+            break;
+        }
         struct list_elem *e = list_begin(&cur->fds);
         struct fd_entry *fd_entry = list_entry(e, struct fd_entry, elem);
+        intr_set_level(old);
         lock_acquire(&file_lock);
         file_close(fd_entry->f);
         lock_release(&file_lock);
         remove_fd(fd_entry->fd);
     }
-
     /* Destroy the current process's page directory and switch back
         to the kernel-only page directory. */
     pd = cur->pagedir;
@@ -450,14 +427,11 @@ bool load (const char *file_name, void (**eip) (void), void **esp) {
         file_deny_write(file);
     }
     lock_release(&file_lock);
-
     if (file == NULL) {
         printf ("load: %s: open failed\n", file_name);
         goto done;
     }
-    
     // -----END MODIFICATION-----
-
 
     
     /* Read and verify executable header. */
@@ -541,10 +515,12 @@ bool load (const char *file_name, void (**eip) (void), void **esp) {
         // [THIS IS A MODIFICATION MADE IN THIS METHOD FROM THE ORIGINAL CODE]
         // -----START MODIFICATION-----
         if (!success && file != NULL) {
-          file_close(file);
-          t->exec_file = NULL;
+            file_close(file);
+            t->exec_file = NULL;
         }
-        if (file_copy) palloc_free_page(file_copy);
+        if (file_copy) {
+            palloc_free_page(file_copy);
+        }
         return success;
         // -----END MODIFICATION-----
 }
@@ -663,7 +639,6 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
  * word-align, push argv pointers, push argv, push argc, and push fake return addr.
  */
 static bool setup_stack (const char *cmdline, void **esp) {
-    // TO DO: CHECK FOR STACK OVERFLOW HERE IN ALL CASES (I.E., SP GOES PAST A PAGE BOUNDARY)
     // allocate a page for the stack
     uint8_t *kpage;
     kpage = palloc_get_page(PAL_USER | PAL_ZERO); // flags

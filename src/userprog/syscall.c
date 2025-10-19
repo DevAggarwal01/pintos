@@ -31,21 +31,26 @@ void syscall_init (void)
 /**
  * Exits the current process with the given status code.
  */
-void system_exit (int status){
-    // get the current thread and set its exit code
+void system_exit (int status) {
     struct thread *t = thread_current();
     t->exit_code = status;
-    // record exit status in the corresponding child record, so parent can get it
+
+    /* Make child-record update + wakeup atomic w.r.t. parent freeing that record. */
+    enum intr_level old_level = intr_disable();
     if (t->child_record != NULL) {
         t->child_record->exit_code = status;
         t->child_record->exited = true;
+        /* sema_up will safely wake the parent. sema_up can be called with
+           interrupts disabled (its implementation handles it). */
         sema_up(&t->child_record->exit_sema);
     }
-    // print exit message and terminate the thread
+    intr_set_level(old_level);
+
     printf("%s: exit(%d)\n", t->name, status);
     process_exit();
     thread_exit();
 }
+
 
 /**
  * Translates a user virtual address to a kernel page.
@@ -113,65 +118,78 @@ static char *copy_string(const char *user_str) {
 }
 
 
-/**
- * Creates a new file descriptor entry for the given file in the current thread.
+/* Creates a new file descriptor entry for the given file in the current thread.
  * Returns pointer to the new file descriptor entry on success, NULL on failure.
  */
 static struct fd_entry *create_fd(struct file *file) {
-    // get the current thread
     struct thread *t = thread_current();
-    // allocate a page for a new file descriptor entry
     struct fd_entry *fd_entry = palloc_get_page(0);
     if (fd_entry == NULL) {
         return NULL;
     }
-    // initialize the entry and add it to the thread's file descriptor list
-    fd_entry->fd = t->next_fd++;
+
+    /* Initialize the entry fields first. */
     fd_entry->f = file;
+
+    /* Make fd allocation and list insertion atomic w.r.t interrupts. */
+    enum intr_level old_level = intr_disable();
+    fd_entry->fd = t->next_fd++;
     list_push_back(&t->fds, &fd_entry->elem);
-    // return the new file descriptor entry
+    intr_set_level(old_level);
+
     return fd_entry;
 }
 
-/**
- * Finds the file descriptor entry for the given fd in the current thread.
+/* Finds the file descriptor entry for the given fd in the current thread.
  * Returns pointer to the file descriptor entry on success, NULL if not found.
+ *
+ * NOTE: This returns a raw pointer into the calling thread's fd list. Callers
+ * must be careful (as usual in PintOS): the returned pointer can be invalidated
+ * when the owning thread closes the FD (e.g. via remove_fd()). We only make
+ * the traversal atomic for safety while we examine the list.
  */
 static struct fd_entry *find_fd(int fd) {
-    // get the current thread
     struct thread *t = thread_current();
     struct list_elem *e;
-    // search the thread's file descriptor list for the given fd
+
+    enum intr_level old_level = intr_disable();
     for (e = list_begin(&t->fds); e != list_end(&t->fds); e = list_next(e)) {
         struct fd_entry *fd_entry = list_entry(e, struct fd_entry, elem);
         if (fd_entry->fd == fd) {
-            // found the file descriptor entry, so return it
+            intr_set_level(old_level);
             return fd_entry;
         }
     }
-    // not found, return NULL
+    intr_set_level(old_level);
     return NULL;
 }
 
-/**
- * Removes the file descriptor entry for the given fd in the current thread.
+/* Removes the file descriptor entry for the given fd in the current thread.
  * Does nothing if the fd is not found.
+ *
+ * IMPORTANT: Do the list removal and the palloc_free_page while interrupts
+ * are still disabled. That prevents any interrupt context from observing a
+ * partially-removed list element or racing with code that sorts/inspects lists.
  */
 void remove_fd(int fd) {
-    // get the current thread
     struct thread *t = thread_current();
     struct list_elem *e;
-    // search the thread's file descriptor list for the given fd
+
+    enum intr_level old_level = intr_disable();
     for (e = list_begin(&t->fds); e != list_end(&t->fds); e = list_next(e)) {
         struct fd_entry *fd_entry = list_entry(e, struct fd_entry, elem);
         if (fd_entry->fd == fd) {
-            // found the file descriptor entry, so remove and free it
             list_remove(e);
+            /* Free the page before re-enabling interrupts to avoid concurrency
+               where an interrupt handler touches the list / element. */
             palloc_free_page(fd_entry);
+            intr_set_level(old_level);
             return;
         }
     }
+    intr_set_level(old_level);
 }
+
 
 
 /**

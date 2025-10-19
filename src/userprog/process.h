@@ -12,7 +12,6 @@ void process_activate (void);
 
 /**
  * Struct to track a relationship between a parent and a child process.
- * TO DO: UNCONVINCED THAT THIS NEEDS SOME OF THESE FIELDS (EXITED? TWO SEMAPHORES?)
  */
 struct child_record {
     tid_t parent_tid;               // parent thread ID
@@ -25,7 +24,7 @@ struct child_record {
     struct semaphore load_sema;     // parent waits until child finishes loading
     struct semaphore exit_sema;     // parent waits until child exits
     struct list_elem elem;          // element for global list
-    struct list_elem elem_child;         // in parent->children list
+    struct list_elem elem_child;    // in parent->children list
 };
 
 #endif /* userprog/process.h */
