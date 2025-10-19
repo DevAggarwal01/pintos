@@ -23,8 +23,7 @@ struct child_record {
     struct semaphore start_sema;    // child waits until parent finishes setup
     struct semaphore load_sema;     // parent waits until child finishes loading
     struct semaphore exit_sema;     // parent waits until child exits
-    struct list_elem elem;          // element for global list
-    struct list_elem elem_child;    // in parent->children list
+    struct list_elem elem_child;    // for representing in parent->children list
 };
 
 #endif /* userprog/process.h */

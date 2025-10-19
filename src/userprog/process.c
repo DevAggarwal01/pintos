@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "userprog/gdt.h"
-#include "userprog/pagedir.h"
+#include "userprog/pagedir.h" 
 #include "userprog/tss.h"
 #include "filesys/directory.h"
 #include "filesys/file.h"
@@ -23,14 +23,11 @@
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 
-
-// a list of all child records 
-static struct list child_list = LIST_INITIALIZER(child_list);
-
+// struct to pass information to the process_start function
 struct start_info {
-  char *fn_copy;
-  struct child_record *rec;
-  struct thread *parent;
+    char *fn_copy;              // copy of the file name (command line)
+    struct child_record *rec;   // child record for this process
+    struct thread *parent;      // parent thread pointer
 };
 
 /* Starts a new thread running a user program loaded from
@@ -71,7 +68,6 @@ process_execute (const char *file_name) {
     sema_init(&rec->load_sema, 0);
     // register the record in global list and parent's child list
     enum intr_level old_level = intr_disable();
-    list_push_back(&child_list, &rec->elem);
     struct thread *parent = thread_current();
     list_push_back(&parent->children, &rec->elem_child);
     intr_set_level(old_level);
@@ -83,7 +79,6 @@ process_execute (const char *file_name) {
     char *prog_copy = palloc_get_page(0);
     if (prog_copy == NULL) {
         enum intr_level old_level = intr_disable();
-        list_remove(&rec->elem);
         list_remove(&rec->elem_child);
         intr_set_level(old_level);
         palloc_free_page(info);
@@ -97,7 +92,6 @@ process_execute (const char *file_name) {
     char *program = strtok_r(prog_copy, " ", &save_ptr);
     if (program == NULL) {
         enum intr_level old_level = intr_disable();
-        list_remove(&rec->elem);
         list_remove(&rec->elem_child);
         intr_set_level(old_level);
         palloc_free_page(info);
@@ -112,7 +106,6 @@ process_execute (const char *file_name) {
     lock_release(&file_lock);
     if (file == NULL) {
         enum intr_level old_level = intr_disable();
-        list_remove(&rec->elem);
         list_remove(&rec->elem_child);
         intr_set_level(old_level);
         palloc_free_page(rec);
@@ -125,7 +118,6 @@ process_execute (const char *file_name) {
     tid = thread_create(program, PRI_DEFAULT, start_process, info);
     if (tid == TID_ERROR) {
         enum intr_level old_level = intr_disable();
-        list_remove(&rec->elem);
         list_remove(&rec->elem_child);
         intr_set_level(old_level);
         palloc_free_page(info);
@@ -146,7 +138,6 @@ process_execute (const char *file_name) {
     // if the child failed to load, clean up and return error (-1)
     if (!rec->loaded) {
         enum intr_level old_level = intr_disable();
-        list_remove(&rec->elem);
         list_remove(&rec->elem_child);
         intr_set_level(old_level);
         palloc_free_page(rec);
@@ -241,7 +232,6 @@ int process_wait (tid_t child_tid) {
     // capture exit status and remove/free the record
     int status = rec->exit_code;
     enum intr_level old_level = intr_disable();
-    list_remove(&rec->elem);
     list_remove(&rec->elem_child);
     intr_set_level(old_level);
     palloc_free_page(rec);

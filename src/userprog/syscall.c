@@ -31,26 +31,21 @@ void syscall_init (void)
 /**
  * Exits the current process with the given status code.
  */
-void system_exit (int status) {
+void system_exit (int status){
+    // get the current thread and set its exit code
     struct thread *t = thread_current();
     t->exit_code = status;
-
-    /* Make child-record update + wakeup atomic w.r.t. parent freeing that record. */
-    enum intr_level old_level = intr_disable();
+    // record exit status in the corresponding child record, so parent can get it
     if (t->child_record != NULL) {
         t->child_record->exit_code = status;
         t->child_record->exited = true;
-        /* sema_up will safely wake the parent. sema_up can be called with
-           interrupts disabled (its implementation handles it). */
         sema_up(&t->child_record->exit_sema);
     }
-    intr_set_level(old_level);
-
+    // print exit message and terminate the thread
     printf("%s: exit(%d)\n", t->name, status);
     process_exit();
     thread_exit();
 }
-
 
 /**
  * Translates a user virtual address to a kernel page.
@@ -118,78 +113,65 @@ static char *copy_string(const char *user_str) {
 }
 
 
-/* Creates a new file descriptor entry for the given file in the current thread.
+/**
+ * Creates a new file descriptor entry for the given file in the current thread.
  * Returns pointer to the new file descriptor entry on success, NULL on failure.
  */
 static struct fd_entry *create_fd(struct file *file) {
+    // get the current thread
     struct thread *t = thread_current();
+    // allocate a page for a new file descriptor entry
     struct fd_entry *fd_entry = palloc_get_page(0);
     if (fd_entry == NULL) {
         return NULL;
     }
-
-    /* Initialize the entry fields first. */
-    fd_entry->f = file;
-
-    /* Make fd allocation and list insertion atomic w.r.t interrupts. */
-    enum intr_level old_level = intr_disable();
+    // initialize the entry and add it to the thread's file descriptor list
     fd_entry->fd = t->next_fd++;
+    fd_entry->f = file;
     list_push_back(&t->fds, &fd_entry->elem);
-    intr_set_level(old_level);
-
+    // return the new file descriptor entry
     return fd_entry;
 }
 
-/* Finds the file descriptor entry for the given fd in the current thread.
+/**
+ * Finds the file descriptor entry for the given fd in the current thread.
  * Returns pointer to the file descriptor entry on success, NULL if not found.
- *
- * NOTE: This returns a raw pointer into the calling thread's fd list. Callers
- * must be careful (as usual in PintOS): the returned pointer can be invalidated
- * when the owning thread closes the FD (e.g. via remove_fd()). We only make
- * the traversal atomic for safety while we examine the list.
  */
 static struct fd_entry *find_fd(int fd) {
+    // get the current thread
     struct thread *t = thread_current();
     struct list_elem *e;
-
-    enum intr_level old_level = intr_disable();
+    // search the thread's file descriptor list for the given fd
     for (e = list_begin(&t->fds); e != list_end(&t->fds); e = list_next(e)) {
         struct fd_entry *fd_entry = list_entry(e, struct fd_entry, elem);
         if (fd_entry->fd == fd) {
-            intr_set_level(old_level);
+            // found the file descriptor entry, so return it
             return fd_entry;
         }
     }
-    intr_set_level(old_level);
+    // not found, return NULL
     return NULL;
 }
 
-/* Removes the file descriptor entry for the given fd in the current thread.
+/**
+ * Removes the file descriptor entry for the given fd in the current thread.
  * Does nothing if the fd is not found.
- *
- * IMPORTANT: Do the list removal and the palloc_free_page while interrupts
- * are still disabled. That prevents any interrupt context from observing a
- * partially-removed list element or racing with code that sorts/inspects lists.
  */
 void remove_fd(int fd) {
+    // get the current thread
     struct thread *t = thread_current();
     struct list_elem *e;
-
-    enum intr_level old_level = intr_disable();
+    // search the thread's file descriptor list for the given fd
     for (e = list_begin(&t->fds); e != list_end(&t->fds); e = list_next(e)) {
         struct fd_entry *fd_entry = list_entry(e, struct fd_entry, elem);
         if (fd_entry->fd == fd) {
+            // found the file descriptor entry, so remove and free it
             list_remove(e);
-            /* Free the page before re-enabling interrupts to avoid concurrency
-               where an interrupt handler touches the list / element. */
             palloc_free_page(fd_entry);
-            intr_set_level(old_level);
             return;
         }
     }
-    intr_set_level(old_level);
 }
-
 
 
 /**
