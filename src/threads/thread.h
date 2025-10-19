@@ -84,47 +84,49 @@ typedef int tid_t;
    ready state is on the run queue, whereas only a thread in the
    blocked state is on a semaphore wait list. */
    
-struct child_record; // forward declaration to avoid circular dependency
+// forward declaration to avoid circular dependency
+struct child_record;
 
+// file descriptor entry structure
 struct fd_entry {
-  int fd;               /* file descriptor (ex. 2,3,4,...) */
-  struct file *f;       /*file pointer*/
-  struct list_elem elem;      /* in thread->fds list */
+    int fd;                  // file descriptor number
+    struct file *f;          // pointer to the opened file   
+    struct list_elem elem;   // list element for inclusion in a list
 };
 
-   struct thread
-{
-  /* Owned by thread.c. */
-  tid_t tid;                 /* Thread identifier. */
-  enum thread_status status; /* Thread state. */
-  char name[16];             /* Name (for debugging purposes). */
-  uint8_t *stack;            /* Saved stack pointer. */
-  int priority;              /* Priority. */
-  int original_priority;     /* Original priority before any donations. */
-  struct list_elem allelem;  /* List element for all threads list. */
+// thread structure
+struct thread {
+    /* Owned by thread.c. */
+    tid_t tid;                 /* Thread identifier. */
+    enum thread_status status; /* Thread state. */
+    char name[16];             /* Name (for debugging purposes). */
+    uint8_t *stack;            /* Saved stack pointer. */
+    int priority;              /* Priority. */
+    int original_priority;     /* Original priority before any donations. */
+    struct list_elem allelem;  /* List element for all threads list. */
 
-  /* Shared between thread.c and synch.c. */
-  struct list_elem elem; /* List element. */
-  struct lock* waiting; /* Lock that thread is waiting on. */
-  struct list locks; /* List of locks held by thread. */
+    /* Shared between thread.c and synch.c. */
+    struct list_elem elem;     /* List element. */
+    struct lock* waiting;      /* Lock that thread is waiting on. */
+    struct list locks;         /* List of locks held by thread. */
 
-   // userprog
-   int exit_code;
-   struct child_record *child_record;
-   struct list children;
-   struct thread *parent;
+    // for user programs
+    int exit_code;                          // exit code of the thread
+    struct child_record *child_record;      // record of this thread in parent's child list
+    struct list children;                   // list for this thread's children
+    struct thread *parent;                  // pointer to parent thread
 
-   struct list fds;     /* List of file descriptors */
-   int next_fd;     /* Next available file descriptor number */
-   struct file *exec_file; /*deny writes to executable files*/
+    struct list fds;                        // list of file descriptor entries
+    int next_fd;                            // next available file descriptor number
+    struct file *exec_file;                 // deny writes to executable files
 
 #ifdef USERPROG
   /* Owned by userprog/process.c. */
   uint32_t *pagedir; /* Page directory. */
 #endif
 
-  /* Owned by thread.c. */
-  unsigned magic; /* Detects stack overflow. */
+    /* Owned by thread.c. */
+    unsigned magic; /* Detects stack overflow. */
 };
 
 /* If false (default), use round-robin scheduler.
